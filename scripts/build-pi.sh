@@ -4,7 +4,7 @@ set -e
 echo "🏗️  Building Photobooth V5 for Raspberry Pi (ARM64)..."
 
 # 1. Build Frontend
-echo "📦 Building Frontend..."
+echo "📦 Skipping Building Frontend... on Pi"
 cd frontend
 npm run build
 cd ..
@@ -12,6 +12,7 @@ cd ..
 # 2. Build Backend (Cross-Compile)
 echo "🐹 Building Backend (Go)..."
 cd backend
+go mod tidy
 # Enable CGO? No, we want static binary if possible, but imaging might need it? 
 # pure go imaging lib used, so CGO_ENABLED=0 should work.
 # However, if we ever needed sqlite or similar, we'd need CGO.

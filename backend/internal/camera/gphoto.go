@@ -7,9 +7,104 @@ import (
 	"os/exec"
 	"path/filepath"
 	"photobooth/internal/config"
+	"strings"
 	"sync"
 	"time"
 )
+
+// CameraInfo holds information about the connected camera.
+type CameraInfo struct {
+	Connected    bool   `json:"connected"`
+	Model        string `json:"model"`
+	Manufacturer string `json:"manufacturer"`
+	SerialNumber string `json:"serialNumber"`
+	LensName     string `json:"lensName"`
+	BatteryLevel string `json:"batteryLevel"`
+	StorageTotal string `json:"storageTotal"`
+	StorageFree  string `json:"storageFree"`
+}
+
+// GetInfo queries the connected camera for summary and storage information.
+// In mock mode it returns static dummy values.
+func (c *Controller) GetInfo() CameraInfo {
+	if c.config.Mock {
+		return CameraInfo{
+			Connected:    true,
+			Model:        "Canon EOS 700D (Mock)",
+			Manufacturer: "Canon Inc.",
+			SerialNumber: "MOCK-123456",
+			LensName:     "EF-S 18-55mm f/3.5-5.6 IS STM",
+			BatteryLevel: "75%",
+			StorageTotal: "32 GB",
+			StorageFree:  "28 GB",
+		}
+	}
+
+	info := CameraInfo{}
+
+	// --- gphoto2 --summary ---
+	summaryOut, err := exec.Command("gphoto2", "--summary").CombinedOutput()
+	if err != nil {
+		log.Printf("⚠️  Camera info unavailable: %v", err)
+		return info // connected stays false
+	}
+	info.Connected = true
+	parseSummary(string(summaryOut), &info)
+
+	// --- gphoto2 --storage-info ---
+	storageOut, err := exec.Command("gphoto2", "--storage-info").CombinedOutput()
+	if err == nil {
+		parseStorage(string(storageOut), &info)
+	}
+
+	return info
+}
+
+// parseSummary extracts key-value pairs from gphoto2 --summary output.
+func parseSummary(output string, info *CameraInfo) {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+
+		switch strings.ToLower(key) {
+		case "model":
+			info.Model = val
+		case "manufacturer":
+			info.Manufacturer = val
+		case "serial number":
+			info.SerialNumber = val
+		case "lens name":
+			info.LensName = val
+		case "battery level":
+			info.BatteryLevel = val
+		}
+	}
+}
+
+// parseStorage extracts storage capacity from gphoto2 --storage-info output.
+func parseStorage(output string, info *CameraInfo) {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+
+		switch strings.ToLower(key) {
+		case "totalcapacity":
+			info.StorageTotal = val
+		case "free":
+			info.StorageFree = val
+		}
+	}
+}
 
 type Controller struct {
 	mu      sync.Mutex

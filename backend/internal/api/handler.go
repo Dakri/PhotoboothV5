@@ -3,9 +3,11 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"photobooth/internal/app"
+	"photobooth/internal/logging"
 )
 
 type Handler struct {
@@ -21,14 +23,16 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/trigger", h.handleTrigger)
 	mux.HandleFunc("/api/photos", h.handlePhotos)
 	mux.HandleFunc("/api/photos/latest", h.handleLatestPhoto)
+	mux.HandleFunc("/api/logs", h.handleLogs)
 	mux.HandleFunc("/api/legacy/poll", h.handleLegacyPoll)
 }
 
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	status := map[string]interface{}{
 		"state":   h.app.GetState(),
-		"clients": len(h.app.Hub.Clients),
-		"uptime":  "TODO",
+		"clients": h.app.Hub.ClientCount(),
+		"uptime":  h.app.GetUptime(),
+		"camera":  h.app.Camera.GetInfo(),
 	}
 	jsonResponse(w, status)
 }
@@ -48,7 +52,6 @@ func (h *Handler) handlePhotos(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Simple pagination could go here
 	jsonResponse(w, photos)
 }
 
@@ -61,8 +64,19 @@ func (h *Handler) handleLatestPhoto(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, photo)
 }
 
+func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
+	limitStr := r.URL.Query().Get("limit")
+	limit := 100
+	if limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	entries := logging.Get().GetEntries(limit)
+	jsonResponse(w, entries)
+}
+
 func (h *Handler) handleLegacyPoll(w http.ResponseWriter, r *http.Request) {
-	// Combined status for polling clients
 	status := map[string]interface{}{
 		"state":     h.app.GetState(),
 		"lastPhoto": h.app.GetLastPhoto(),

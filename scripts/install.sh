@@ -5,9 +5,9 @@ echo "🔧 Installing Photobooth Service..."
 
 # 1. Install Dependencies
 echo "📦 Checking system dependencies..."
-if ! command -v gphoto2 &> /dev/null; then
-    echo "Installing gphoto2..."
-    apt-get update && apt-get install -y gphoto2
+if ! command -v gphoto2 &> /dev/null || ! dpkg -s dnsmasq-base &> /dev/null; then
+    echo "Installing dependencies (gphoto2, dnsmasq-base)..."
+    apt-get update && apt-get install -y gphoto2 dnsmasq-base
 fi
 
 if ! command -v nmcli &> /dev/null; then

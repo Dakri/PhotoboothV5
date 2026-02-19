@@ -79,21 +79,38 @@ Result:   { image: { previewWidth: 600, thumbWidth: 200 } }
 
 | Methode | Beschreibung |
 |---|---|
-| `checkStatus()` | Prüft ob gphoto2 + Kamera vorhanden sind |
-| `capture()` | Löst Foto aus und downloadet es, Mutex-geschützt |
-| `isBusy()` | Gibt `true` zurück wenn gerade fotografiert wird |
+| `Capture()` | Löst Foto aus und downloadet es, Mutex-geschützt |
+| `GetInfo()` | Gibt `CameraInfo` Struct zurück (Modell, Akku, Speicher, etc.) |
+
+**CameraInfo Struct:**
+```go
+type CameraInfo struct {
+    Connected    bool   `json:"connected"`
+    Model        string `json:"model"`
+    Manufacturer string `json:"manufacturer"`
+    SerialNumber string `json:"serialNumber"`
+    LensName     string `json:"lensName"`
+    BatteryLevel string `json:"batteryLevel"`
+    StorageTotal string `json:"storageTotal"`
+    StorageFree  string `json:"storageFree"`
+}
+```
 
 **Capture-Ablauf:**
 1. Mutex setzen (`busy = true`)
 2. Dateiname generieren: `IMG_YYYYMMDD_HHMMSS.jpg`
 3. `gphoto2 --capture-image-and-download --force-overwrite --filename <path>` ausführen
 4. Prüfen ob Datei existiert
-5. Bei Fehler: Retry (konfigurierbar, Default: 2 Versuche)
-6. Mutex lösen
+5. Mutex lösen
+
+**GetInfo-Ablauf:**
+1. `gphoto2 --summary` → Parst Model, Manufacturer, Serial Number, Lens Name, Battery Level
+2. `gphoto2 --storage-info` → Parst TotalCapacity, Free
+3. Bei Fehler: `Connected = false`, leere Felder
 
 **Mock-Modus:**
-- Generiert ein farbiges 1920×1280 JPEG mit `sharp`
-- 500ms simulierte Verzögerung
+- `Capture()`: Erstellt eine Dummy-Datei, 1s simulierte Verzögerung
+- `GetInfo()`: Gibt statische Dummy-Daten zurück ("Canon EOS 700D (Mock)", 75% Akku, etc.)
 - Für Entwicklung ohne Kamera
 
 **gphoto2 Befehle:**
@@ -103,6 +120,12 @@ gphoto2 --auto-detect
 
 # Foto aufnehmen und direkt herunterladen
 gphoto2 --capture-image-and-download --force-overwrite --filename /path/to/IMG.jpg
+
+# Kamera-Zusammenfassung (Model, Hersteller, Akku, etc.)
+gphoto2 --summary
+
+# Speicherinfo (Kapazität, freier Platz)
+gphoto2 --storage-info
 
 # Kamera-Einstellungen lesen
 gphoto2 --list-config
@@ -344,11 +367,15 @@ Bei Fehler in Schritt 2-3:
 
 **`photobooth` Store:**
 - `state` – Aktueller Zustand (idle, countdown, etc.)
-- `countdownRemaining` – Verbleibende Sekunden
-- `countdownTotal` – Gesamt-Countdown
-- `currentPhoto` – Aktuell angezeigte Vorschau
-- `connectedClients` – Verbundene Clients
+- `countdown` – `{ remaining, total }` für Countdown
+- `lastPhoto` – Letztes aufgenommenes Foto
+- `clients` – Anzahl verbundener Clients
+- `uptime` – Server Uptime
+- `logs` – Array von Log-Einträgen (max 200)
+- `cameraInfo` – `CameraInfo` Objekt (connected, model, manufacturer, lensName, batteryLevel, storageFree etc.)
 - `trigger()` – Foto auslösen
+- `fetchStatus()` – Status inkl. Kamera-Info vom Server laden (alle 5s per Polling)
+- `fetchLogs()` – Bestehende Logs laden
 
 **`gallery` Store:**
 - `photos` – Array von PhotoEntry
@@ -374,11 +401,18 @@ Bei Fehler in Schritt 2-3:
 
 | Route | View | Beschreibung |
 |---|---|---|
-| `/` | DashboardView | Admin-Panel: Status, Einstellungen, USB, Clients |
+| `/` | DashboardView | Admin-Panel: Status, Trigger, letztes Foto, Kamera-Info, Log-Viewer |
 | `/buzzer` | BuzzerView | Großer Touch-Button zum Auslösen |
 | `/countdown` | CountdownView | Vollbild-Countdown mit Animation |
 | `/preview` | PreviewView | Foto-Vorschau nach Aufnahme |
 | `/gallery` | GalleryView | Foto-Raster mit Lightbox |
+
+**Dashboard Camera-Karte:**
+- Zeigt Verbindungsstatus (grün/rot), Modellname, Hersteller, Objektiv
+- Akku-Füllstand mit farbigem Balken (grün >50%, gelb >20%, rot ≤20%)
+- Freier Speicherplatz auf der SD-Karte
+- Fallback: "Keine Kamera erkannt" wenn `cameraInfo.connected === false`
+- Wird alle 5 Sekunden per Status-Polling aktualisiert
 
 ### Client-Rollen-System
 
@@ -578,18 +612,32 @@ data/photos/
 ### Build-Reihenfolge
 
 ```bash
-# 1. Backend kompilieren (TypeScript → JavaScript)
-cd server && npm run build
-#    Output: server/dist/
+# 1. Frontend bauen (Vite → statische Dateien)
+cd frontend && npm run build
+#    Output: dist/frontend/
 
-# 2. Frontend bauen (Vite → statische Dateien)
-cd client && npm run build
-#    Output: client/dist/
-#    (wird vom Backend unter / serviert)
+# 2. Backend kompilieren (Go → Binary, Cross-Compile für Pi)
+#    Siehe scripts/build-pi.sh
+GOOS=linux GOARCH=arm GOARM=7 go build -o dist/photobooth backend/cmd/server/main.go
 
 # 3. Legacy-Client – kein Build nötig
 #    (statische Dateien, direkt serviert)
 ```
+
+### Deploy Script (`scripts/deploy.sh`)
+
+**Verwendet SSH ControlMaster** für eine einmalige Passwort-Eingabe über alle SSH/rsync-Verbindungen hinweg.
+
+```bash
+./scripts/deploy.sh pi@192.168.4.1
+```
+
+**Ablauf:**
+1. SSH ControlMaster-Verbindung herstellen (einmalige Passwort-Eingabe)
+2. `build-pi.sh` ausführen (Frontend + Backend kompilieren)
+3. Dateien per `rsync` zum Pi übertragen (ohne `data/` Ordner)
+4. `install.sh` auf dem Pi ausführen (systemd Service einrichten)
+5. ControlSocket automatisch aufräumen bei Exit
 
 ### systemd Service
 
@@ -602,10 +650,9 @@ After=network.target NetworkManager.service
 Type=simple
 User=pi
 WorkingDirectory=/opt/photobooth
-ExecStart=/usr/bin/node /opt/photobooth/server/dist/index.js
+ExecStart=/opt/photobooth/photobooth
 Restart=always
 RestartSec=5
-Environment=NODE_ENV=production
 
 [Install]
 WantedBy=multi-user.target

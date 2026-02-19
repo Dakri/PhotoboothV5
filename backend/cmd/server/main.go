@@ -15,6 +15,7 @@ import (
 	"photobooth/internal/config"
 	"photobooth/internal/dns"
 	"photobooth/internal/imaging"
+	"photobooth/internal/logging"
 	"photobooth/internal/network"
 	"photobooth/internal/storage"
 	"photobooth/internal/websocket"
@@ -27,11 +28,15 @@ func main() {
 	log.Println("║       📷 PhotoboothV5 Starting       ║")
 	log.Println("╚══════════════════════════════════════╝")
 
+	// Initialize structured logger
+	appLog := logging.Init(500)
+
 	// 2. Load Config
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("❌ Failed to load config: %v", err)
+		log.Fatalf("Failed to load config: %v", err)
 	}
+	appLog.Info("config", "Configuration loaded successfully")
 
 	// 3. Prepare Directories
 	cwd, _ := os.Getwd()

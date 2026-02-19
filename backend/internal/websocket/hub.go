@@ -17,6 +17,7 @@ const (
 	EventTypeStatus    = "status"
 	EventTypeCountdown = "countdown"
 	EventTypePhoto     = "photo_ready"
+	EventTypeLog       = "log"
 	TypeError          = "error"
 )
 
@@ -53,6 +54,12 @@ func NewHub() *Hub {
 	}
 }
 
+func (h *Hub) ClientCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.Clients)
+}
+
 func (h *Hub) Run() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -63,14 +70,14 @@ func (h *Hub) Run() {
 			h.mu.Lock()
 			h.Clients[client] = true
 			h.mu.Unlock()
-			log.Printf("🔌 Client connected. Total: %d", len(h.Clients))
+			log.Printf("Client connected. Total: %d", len(h.Clients))
 
 		case client := <-h.Unregister:
 			h.mu.Lock()
 			if _, ok := h.Clients[client]; ok {
 				delete(h.Clients, client)
 				close(client.Send)
-				log.Printf("🔌 Client disconnected. Total: %d", len(h.Clients))
+				log.Printf("Client disconnected. Total: %d", len(h.Clients))
 			}
 			h.mu.Unlock()
 
@@ -87,7 +94,7 @@ func (h *Hub) Run() {
 			h.mu.Unlock()
 
 		case <-ticker.C:
-			// Keep-alive logic if needed
+			// Keep-alive
 		}
 	}
 }
@@ -106,8 +113,6 @@ func (h *Hub) ServeWs(w http.ResponseWriter, r *http.Request) {
 	client := &Client{Hub: h, Conn: conn, Send: make(chan Event, 256)}
 	client.Hub.Register <- client
 
-	// Allow collection of memory referenced by the caller by doing all work in
-	// new goroutines.
 	go client.writePump()
 	go client.readPump()
 }
@@ -124,7 +129,6 @@ func (c *Client) readPump() {
 			break
 		}
 
-		// Parse message
 		var msg map[string]interface{}
 		if err := json.Unmarshal(message, &msg); err != nil {
 			continue
@@ -134,9 +138,11 @@ func (c *Client) readPump() {
 
 		switch msgType {
 		case EventTypeRegister:
-			if role, ok := msg["data"].(map[string]interface{})["role"].(string); ok {
-				c.Role = role
-				log.Printf("👤 Client registered as: %s", role)
+			if data, ok := msg["data"].(map[string]interface{}); ok {
+				if role, ok := data["role"].(string); ok {
+					c.Role = role
+					log.Printf("Client registered as: %s", role)
+				}
 			}
 		case EventTypeTrigger:
 			if c.Hub.OnTrigger != nil {

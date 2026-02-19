@@ -1,15 +1,45 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
+
+export interface LogEntry {
+    level: string
+    message: string
+    source: string
+    timestamp: number
+}
+
+export interface CameraInfo {
+    connected: boolean
+    model: string
+    manufacturer: string
+    serialNumber: string
+    lensName: string
+    batteryLevel: string
+    storageTotal: string
+    storageFree: string
+}
 
 export const usePhotoboothStore = defineStore('photobooth', () => {
     // State
     const connected = ref(false)
-    const state = ref('idle') // idle, countdown, capturing, processing, preview, error
+    const state = ref('idle')
     const countdown = ref({ remaining: 0, total: 0 })
     const lastPhoto = ref<any>(null)
     const error = ref<string | null>(null)
     const clients = ref(0)
-    
+    const logs = ref<LogEntry[]>([])
+    const uptime = ref('00:00')
+    const cameraInfo = ref<CameraInfo>({
+        connected: false,
+        model: '',
+        manufacturer: '',
+        serialNumber: '',
+        lensName: '',
+        batteryLevel: '',
+        storageTotal: '',
+        storageFree: ''
+    })
+
     // WebSocket
     let ws: WebSocket | null = null
     let reconnectTimer: any = null
@@ -21,24 +51,17 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
         const host = window.location.host
         const url = `${protocol}//${host}/ws`
 
-        console.log('🔌 Connecting to WebSocket:', url)
         ws = new WebSocket(url)
 
         ws.onopen = () => {
-            console.log('✅ WebSocket connected')
             connected.value = true
             error.value = null
             if (reconnectTimer) clearInterval(reconnectTimer)
-            
-            // Identify based on URL logic or just default
-            // Views will register roles on mount
         }
 
         ws.onclose = () => {
-            console.log('❌ WebSocket disconnected')
             connected.value = false
             ws = null
-            // Reconnect logic
             reconnectTimer = setTimeout(() => connect(), 2000)
         }
 
@@ -76,9 +99,45 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
                 state.value = 'error'
                 setTimeout(() => { error.value = null }, 5000)
                 break
-            case 'clients_update':
-                clients.value = msg.data.count // If we implemented this
+            case 'log':
+                addLog(msg.data)
                 break
+        }
+    }
+
+    function addLog(entry: LogEntry) {
+        logs.value.push(entry)
+        // Keep max 200 entries in frontend
+        if (logs.value.length > 200) {
+            logs.value = logs.value.slice(-200)
+        }
+    }
+
+    async function fetchLogs() {
+        try {
+            const res = await fetch('/api/logs?limit=100')
+            if (res.ok) {
+                logs.value = await res.json()
+            }
+        } catch (e) {
+            console.error('Failed to fetch logs:', e)
+        }
+    }
+
+    async function fetchStatus() {
+        try {
+            const res = await fetch('/api/status')
+            if (res.ok) {
+                const data = await res.json()
+                state.value = data.state
+                clients.value = data.clients
+                uptime.value = data.uptime
+                if (data.camera) {
+                    cameraInfo.value = data.camera
+                }
+            }
+        } catch (e) {
+            console.error('Failed to fetch status:', e)
         }
     }
 
@@ -89,14 +148,13 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
 
     function register(role: string) {
         if (!ws || ws.readyState !== WebSocket.OPEN) {
-             // Retry if not connected yet
-             const interval = setInterval(() => {
-                 if (ws && ws.readyState === WebSocket.OPEN) {
-                     ws.send(JSON.stringify({ type: 'register', data: { role } }))
-                     clearInterval(interval)
-                 }
-             }, 500)
-             return
+            const interval = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'register', data: { role } }))
+                    clearInterval(interval)
+                }
+            }, 500)
+            return
         }
         ws.send(JSON.stringify({ type: 'register', data: { role } }))
     }
@@ -108,8 +166,14 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
         lastPhoto,
         error,
         clients,
+        logs,
+        uptime,
+        cameraInfo,
         connect,
         trigger,
-        register
+        register,
+        fetchLogs,
+        fetchStatus,
+        addLog
     }
 })

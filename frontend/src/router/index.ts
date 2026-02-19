@@ -1,8 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import DashboardView from '../views/DashboardView.vue'
-import BuzzerView from '../views/BuzzerView.vue'
-import CountdownView from '../views/CountdownView.vue'
-import PreviewView from '../views/PreviewView.vue'
+import ModeSelectView from '../views/ModeSelectView.vue'
+import ClientView from '../views/ClientView.vue'
 import GalleryView from '../views/GalleryView.vue'
 
 const router = createRouter({
@@ -14,24 +13,32 @@ const router = createRouter({
       component: DashboardView
     },
     {
-      path: '/buzzer',
-      name: 'buzzer',
-      component: BuzzerView
+      path: '/modes',
+      name: 'modes',
+      component: ModeSelectView
     },
     {
-      path: '/countdown',
-      name: 'countdown',
-      component: CountdownView
-    },
-    {
-      path: '/preview',
-      name: 'preview',
-      component: PreviewView
+      path: '/client',
+      name: 'client',
+      component: ClientView
     },
     {
       path: '/gallery',
       name: 'gallery',
       component: GalleryView
+    },
+    // Legacy routes redirect to new client system
+    {
+      path: '/buzzer',
+      redirect: '/modes'
+    },
+    {
+      path: '/countdown',
+      redirect: '/modes'
+    },
+    {
+      path: '/preview',
+      redirect: '/modes'
     }
   ]
 })
