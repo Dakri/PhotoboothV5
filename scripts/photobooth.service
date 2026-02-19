@@ -1,0 +1,17 @@
+[Unit]
+Description=Photobooth V5
+After=network.target NetworkManager.service
+
+[Service]
+Type=simple
+User=root
+# Running as root for nmcli access and port 80/53 binding. 
+# Alternatively use capabilities: CAP_NET_BIND_SERVICE, CAP_NET_ADMIN
+WorkingDirectory=/opt/photobooth
+ExecStart=/opt/photobooth/photobooth
+Restart=always
+RestartSec=5
+Environment=StartedBySystemd=true
+
+[Install]
+WantedBy=multi-user.target

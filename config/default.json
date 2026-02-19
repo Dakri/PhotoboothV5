@@ -1,0 +1,47 @@
+{
+  "server": {
+    "port": 80,
+    "host": "0.0.0.0"
+  },
+  "camera": {
+    "enabled": true,
+    "mock": false,
+    "captureCommand": "gphoto2",
+    "captureArgs": ["--capture-image-and-download", "--force-overwrite"],
+    "retryAttempts": 2,
+    "retryDelayMs": 1000
+  },
+  "photobooth": {
+    "countdownSeconds": 5,
+    "previewDisplaySeconds": 8,
+    "photosPerTrigger": 1,
+    "collageEnabled": false
+  },
+  "image": {
+    "previewWidth": 800,
+    "previewQuality": 80,
+    "thumbnailWidth": 200,
+    "thumbnailQuality": 70,
+    "keepOriginal": true
+  },
+  "wifi": {
+    "enabled": true,
+    "ssid": "Photobooth",
+    "password": "",
+    "interface": "wlan0",
+    "ipAddress": "192.168.4.1",
+    "dhcpRangeStart": "192.168.4.10",
+    "dhcpRangeEnd": "192.168.4.100",
+    "captivePortal": true
+  },
+  "auth": {
+    "dashboardPin": "1234",
+    "requirePinForBuzzer": false,
+    "requirePinForGallery": false
+  },
+  "storage": {
+    "photosDir": "./data/photos",
+    "usbAutoExport": true,
+    "maxStorageMB": 0
+  }
+}
