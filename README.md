@@ -51,6 +51,25 @@ PhotoboothV5 verwandelt deinen Raspberry Pi in eine vollständige, professionell
 
 ---
 
+## Bedienung & Zugriff
+
+Sobald die Software läuft, ist sie über das Netzwerk erreichbar.
+
+### Zugriff auf die Weboberfläche
+Standardmäßig ist die Booth im eigenen WLAN erreichbar unter:
+- **URL**: `http://192.168.4.1` (oder die IP-Adresse des Pi in deinem Netzwerk)
+- **Dashboard (Admin)**: Einfach die Haupt-URL aufrufen.
+- **Legacy-Client**: `http://192.168.4.1/legacy/` (für sehr alte Geräte).
+
+### So startest du die Booth
+1.  **Dashboard öffnen**: Rufe die IP des Pi im Browser auf.
+2.  **Client-Modus starten**: Klicke oben rechts im Header auf das **Monitor-Icon** (Clients & Modi).
+3.  **Modus wählen**: Wähle aus den 6 verfügbaren Modi (z.B. "Vollständig").
+4.  **Vollbild**: Der Browser wechselt automatisch in den Vollbildmodus.
+5.  **Sperre**: Um den Modus zu verlassen, tippe **10x schnell** auf den Bildschirm (subtile Punkte oben rechts zeigen den Fortschritt).
+
+---
+
 ## Architektur & Tech-Stack
 
 Für die Technik-Begeisterten: PhotoboothV5 ist auf maximale Performance und minimale Abhängigkeiten ausgelegt.
