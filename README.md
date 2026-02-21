@@ -144,6 +144,8 @@ PhotoboothV5/
 
 ```bash
 # Auf dem Entwicklungs-PC (nicht auf dem Pi!)
+*** Dies erfordert NodeJs 20+ und Go 1.25+ ***
+*** Ich empfehle WSL2 für das deployment ***
 ./scripts/deploy.sh pi@192.168.x.x
 ```
 
