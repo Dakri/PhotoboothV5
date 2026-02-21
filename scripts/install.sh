@@ -46,9 +46,6 @@ if [ -f /usr/lib/gvfs/gvfs-gphoto2-volume-monitor ]; then
 fi
 
 # 2. Setup Directories
-mkdir -p /opt/photobooth/data/photos/original
-mkdir -p /opt/photobooth/data/photos/preview
-mkdir -p /opt/photobooth/data/photos/thumb
 chmod -R 777 /opt/photobooth/data # Allow storage access
 
 # 3. Setup Systemd Service

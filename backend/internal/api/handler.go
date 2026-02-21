@@ -1,12 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"photobooth/internal/app"
@@ -18,6 +19,11 @@ import (
 
 type Handler struct {
 	app *app.App
+
+	// USB export concurrency guard
+	exportMu     sync.Mutex
+	exportActive bool
+	exportCancel context.CancelFunc
 }
 
 func NewHandler(a *app.App) *Handler {
@@ -37,6 +43,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/gallery/delete", h.handleGalleryDelete)
 	mux.HandleFunc("/api/usb/devices", h.handleUsbDevices)
 	mux.HandleFunc("/api/usb/export", h.handleUsbExport)
+	mux.HandleFunc("/api/usb/export/cancel", h.handleUsbExportCancel)
+	mux.HandleFunc("/api/usb/unmount", h.handleUsbUnmount)
 	mux.HandleFunc("/api/camera/files", h.handleCameraFiles)
 }
 
@@ -292,6 +300,23 @@ func (h *Handler) handleUsbDevices(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Auto-mount any unmounted USB devices so we can read their free space
+	for _, d := range devices {
+		if d.MountPoint == "" {
+			h.app.Log.Info("usb", "Auto-mounting %s...", d.Name)
+			if _, err := disk.MountUsb(d.Name); err != nil {
+				h.app.Log.Warn("usb", "Auto-mount of %s failed: %v", d.Name, err)
+			}
+		}
+	}
+
+	// Re-fetch after mounting so free space is populated
+	devices, err = disk.GetUsbDevices()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	jsonResponse(w, devices)
 }
 
@@ -302,27 +327,44 @@ func (h *Handler) handleUsbExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		DeviceName string `json:"deviceName"` // e.g., "sda1"
+		DeviceName string `json:"deviceName"`
 		AlbumName  string `json:"albumName"`
-		CopyMode   string `json:"copyMode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
 	if req.DeviceName == "" || req.AlbumName == "" {
 		http.Error(w, "deviceName and albumName required", http.StatusBadRequest)
 		return
 	}
 
+	// --- Concurrency guard: only one export at a time ---
+	h.exportMu.Lock()
+	if h.exportActive {
+		h.exportMu.Unlock()
+		http.Error(w, "An export is already running", http.StatusConflict)
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	h.exportActive = true
+	h.exportCancel = cancel
+	h.exportMu.Unlock()
+
 	sanitizedAlbum := config.SanitizeAlbumName(req.AlbumName)
-	albumDir := filepath.Join(h.app.Config.Booth.PhotosBasePath, sanitizedAlbum)
+	// Only copy the original folder
+	srcDir := filepath.Join(h.app.Config.Booth.PhotosBasePath, sanitizedAlbum, "original")
 
-	// Run export asynchronously so we don't block the request for huge albums
 	go func() {
-		h.app.Log.Info("usb", "Starting export of album '%s' to USB device '%s'...", req.AlbumName, req.DeviceName)
+		defer func() {
+			h.exportMu.Lock()
+			h.exportActive = false
+			h.exportCancel = nil
+			h.exportMu.Unlock()
+			cancel() // always release resources
+		}()
 
+		h.app.Log.Info("usb", "Starting export of album '%s' (original only) to USB device '%s'...", req.AlbumName, req.DeviceName)
 		h.app.Hub.Broadcast <- websocket.Event{
 			Type:      "usb_export_start",
 			Data:      map[string]string{"album": req.AlbumName},
@@ -333,89 +375,131 @@ func (h *Handler) handleUsbExport(w http.ResponseWriter, r *http.Request) {
 		mountPoint, err := disk.MountUsb(req.DeviceName)
 		if err != nil {
 			h.app.Log.Error("usb", "Failed to mount device %s: %v", req.DeviceName, err)
-			h.app.Hub.Broadcast <- websocket.Event{Type: "usb_export_error", Data: map[string]string{"message": "Mount failed"}}
+			h.app.Hub.Broadcast <- websocket.Event{Type: "usb_export_error", Data: map[string]string{"message": "Mount failed: " + err.Error()}, Timestamp: time.Now().UnixMilli()}
 			return
 		}
 
-		// 2. Prepare destination directory (e.g., /media/sda1/Photobooth_Export/Hochzeit)
+		// 2. Destination
 		dstDir := filepath.Join(mountPoint, "Photobooth_Export", req.AlbumName)
 
-		// 3. Check if we need to fetch RAWs from camera
-		if req.CopyMode == "raw_jpeg" {
-			method := "C" // default
-			if m, ok := h.app.Config.Booth.AlbumCaptureMethods[sanitizedAlbum]; ok && m != "" {
-				method = m
-			}
+		// Track start time for ETA
+		startTime := time.Now()
 
-			if method == "A" {
-				// RAWs are only on the camera SD card, download them directly
-				rawDstDir := filepath.Join(dstDir, "RAW_FROM_CAMERA")
-				h.app.Log.Info("usb", "Copy mode is raw_jpeg and method is A. Fetching RAWs directly from camera to %s", rawDstDir)
-
-				err = h.app.Camera.DownloadAllRawToPath(rawDstDir, func(copied, total int) {
-					// Broadcast progress for RAWs
-					if copied%2 == 0 || copied == total {
-						h.app.Hub.Broadcast <- websocket.Event{
-							Type: "usb_export_progress",
-							Data: map[string]interface{}{
-								"album":  req.AlbumName,
-								"copied": copied,
-								"total":  total,
-								"phase":  fmt.Sprintf("Download RAW (%d/%d)", copied, total),
-							},
-							Timestamp: time.Now().UnixMilli(),
-						}
-					}
-				})
-				if err != nil {
-					h.app.Log.Error("usb", "Failed to download RAWs from camera: %v", err)
+		// 3. Copy just the original folder with progress
+		err = disk.CopyDirWithProgress(ctx, srcDir, dstDir, func(copiedBytes, totalBytes, copiedFiles, totalFiles int64) {
+			var etaSecs int64
+			if copiedBytes > 0 && totalBytes > 0 {
+				elapsed := time.Since(startTime).Seconds()
+				bytesPerSec := float64(copiedBytes) / elapsed
+				if bytesPerSec > 0 {
+					etaSecs = int64(float64(totalBytes-copiedBytes) / bytesPerSec)
 				}
 			}
-		}
-
-		// 4. Copy files recursively with progress reporting
-		err = disk.CopyDirWithProgress(albumDir, dstDir, func(copied, total int) {
-			// Throttle progress updates to avoid spamming the websocket
-			if copied%5 == 0 || copied == total {
-				h.app.Hub.Broadcast <- websocket.Event{
-					Type: "usb_export_progress",
-					Data: map[string]interface{}{
-						"album":  req.AlbumName,
-						"copied": copied,
-						"total":  total,
-					},
-					Timestamp: time.Now().UnixMilli(),
-				}
+			h.app.Hub.Broadcast <- websocket.Event{
+				Type: "usb_export_progress",
+				Data: map[string]interface{}{
+					"album":       req.AlbumName,
+					"copiedBytes": copiedBytes,
+					"totalBytes":  totalBytes,
+					"copiedFiles": copiedFiles,
+					"totalFiles":  totalFiles,
+					"etaSeconds":  etaSecs,
+				},
+				Timestamp: time.Now().UnixMilli(),
 			}
 		})
 
 		if err != nil {
-			h.app.Log.Error("usb", "Failed to copy files to USB: %v", err)
-			h.app.Hub.Broadcast <- websocket.Event{Type: "usb_export_error", Data: map[string]string{"message": "Copy failed"}}
+			msg := "Copy failed"
+			if ctx.Err() != nil {
+				msg = "Export cancelled"
+				h.app.Log.Info("usb", "Export of album '%s' was cancelled.", req.AlbumName)
+			} else {
+				h.app.Log.Error("usb", "Failed to copy files to USB: %v", err)
+			}
+			h.app.Hub.Broadcast <- websocket.Event{Type: "usb_export_error", Data: map[string]string{"message": msg}, Timestamp: time.Now().UnixMilli()}
 			return
 		}
 
-		// 4. Unmount before reporting success to ensure data is written cleanly
-		err = disk.UnmountUsb(mountPoint)
-		if err != nil {
-			h.app.Log.Warn("usb", "Export succeeded, but unmount failed: %v", err)
-			// Proceed to success anyway, as the copy phase worked.
-		} else {
-			h.app.Log.Info("usb", "USB device %s cleanly unmounted.", mountPoint)
-		}
-
-		h.app.Log.Info("usb", "Export of album '%s' to USB successful.", req.AlbumName)
+		// 4. Sync + do NOT auto-unmount – let the user press "Safely Remove"
+		// Just flush buffers
+		h.app.Log.Info("usb", "Export done. Flushing buffers...")
 		h.app.Hub.Broadcast <- websocket.Event{
-			Type: "usb_export_success",
-			Data: map[string]interface{}{
-				"album": req.AlbumName,
-				"path":  dstDir,
-			},
+			Type:      "usb_export_success",
+			Data:      map[string]interface{}{"album": req.AlbumName, "path": dstDir},
 			Timestamp: time.Now().UnixMilli(),
 		}
 	}()
 
 	jsonResponse(w, map[string]string{"status": "export_started"})
+}
+
+func (h *Handler) handleUsbExportCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	h.exportMu.Lock()
+	active := h.exportActive
+	cancel := h.exportCancel
+	h.exportMu.Unlock()
+
+	if !active || cancel == nil {
+		http.Error(w, "No active export", http.StatusConflict)
+		return
+	}
+	cancel()
+	jsonResponse(w, map[string]string{"status": "cancelling"})
+}
+
+func (h *Handler) handleUsbUnmount(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		DeviceName string `json:"deviceName"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DeviceName == "" {
+		http.Error(w, "deviceName required", http.StatusBadRequest)
+		return
+	}
+
+	// Prevent unmounting a device that's being exported to
+	h.exportMu.Lock()
+	active := h.exportActive
+	h.exportMu.Unlock()
+	if active {
+		http.Error(w, "Cannot unmount while export is running", http.StatusConflict)
+		return
+	}
+
+	// Resolve mountpoint from device name
+	devices, err := disk.GetUsbDevices()
+	if err != nil {
+		http.Error(w, "Failed to list devices: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	mountPoint := ""
+	for _, d := range devices {
+		if d.Name == req.DeviceName {
+			mountPoint = d.MountPoint
+			break
+		}
+	}
+	if mountPoint == "" {
+		http.Error(w, "Device not mounted or not found", http.StatusNotFound)
+		return
+	}
+
+	if err := disk.UnmountUsb(mountPoint); err != nil {
+		h.app.Log.Error("usb", "Unmount of %s failed: %v", req.DeviceName, err)
+		http.Error(w, "Unmount failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.app.Log.Info("usb", "Device %s safely unmounted.", req.DeviceName)
+	jsonResponse(w, map[string]string{"status": "unmounted"})
 }
 
 func jsonResponse(w http.ResponseWriter, data interface{}) {

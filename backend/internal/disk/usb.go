@@ -1,6 +1,7 @@
 package disk
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -126,23 +127,31 @@ func UnmountUsb(mountPoint string) error {
 }
 
 // CopyDir recursively copies a directory to a destination.
-func CopyDir(src string, dst string) error {
-	return CopyDirWithProgress(src, dst, nil)
+func CopyDir(ctx context.Context, src string, dst string) error {
+	return CopyDirWithProgress(ctx, src, dst, nil)
 }
 
 // CopyDirWithProgress recursively copies a directory to a destination and reports progress.
-func CopyDirWithProgress(src string, dst string, onProgress func(copied, total int)) error {
-	total := 0
+func CopyDirWithProgress(ctx context.Context, src string, dst string, onProgress func(copiedBytes, totalBytes, copiedFiles, totalFiles int64)) error {
+	var totalBytes, totalFiles, copiedBytes, copiedFiles int64
+
 	filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err == nil && !info.IsDir() {
-			total++
+			totalFiles++
+			totalBytes += info.Size()
 		}
 		return nil
 	})
 
-	copied := 0
 	var copyRecursive func(s, d string) error
 	copyRecursive = func(s, d string) error {
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		entries, err := os.ReadDir(s)
 		if err != nil {
 			return err
@@ -160,13 +169,28 @@ func CopyDirWithProgress(src string, dst string, onProgress func(copied, total i
 					return err
 				}
 			} else {
+				// Check for cancellation before each file
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+
+				info, err := entry.Info()
+				var size int64
+				if err == nil {
+					size = info.Size()
+				}
+
 				err = copyFile(srcPath, dstPath)
 				if err != nil {
 					return err
 				}
-				copied++
+
+				copiedFiles++
+				copiedBytes += size
 				if onProgress != nil {
-					onProgress(copied, total)
+					onProgress(copiedBytes, totalBytes, copiedFiles, totalFiles)
 				}
 			}
 		}

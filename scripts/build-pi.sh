@@ -30,6 +30,7 @@ echo "📂 Copying assets..."
 mkdir -p dist/public/frontend
 mkdir -p dist/public/legacy
 mkdir -p dist/config
+mkdir -p dist/scripts
 
 # Frontend built to ../public/frontend (via vite config we set earlier? Let's check)
 # Vite config said: outDir: '../public/frontend' relative to frontend dir.
@@ -55,6 +56,7 @@ mkdir -p dist/config
 cp -r public dist/
 cp -r legacy dist/public/
 cp config/server.conf.json dist/config/
-cp -r scripts dist/
+cp scripts/install.sh dist/scripts/install.sh
+cp scripts/photobooth.service dist/scripts/photobooth.service
 
 echo "✅ Build Complete! artifacts are in dist/"

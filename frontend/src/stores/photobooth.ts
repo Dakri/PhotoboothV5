@@ -62,8 +62,11 @@ export interface UsbDevice {
 export interface UsbExportProgress {
     active: boolean
     album: string
-    copied: number
-    total: number
+    copiedBytes: number
+    totalBytes: number
+    copiedFiles: number
+    totalFiles: number
+    etaSeconds: number
     error?: string
 }
 
@@ -106,7 +109,7 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
     })
     const albums = ref<AlbumInfo[]>([])
     const usbDevices = ref<UsbDevice[]>([])
-    const usbExport = ref<UsbExportProgress>({ active: false, album: '', copied: 0, total: 0 })
+    const usbExport = ref<UsbExportProgress>({ active: false, album: '', copiedBytes: 0, totalBytes: 0, copiedFiles: 0, totalFiles: 0, etaSeconds: 0 })
 
     // WebSocket
     let ws: WebSocket | null = null
@@ -175,16 +178,24 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
                 addLog(msg.data)
                 break
             case 'usb_export_start':
-                usbExport.value = { active: true, album: msg.data.album, copied: 0, total: 0 }
+                usbExport.value = { active: true, album: msg.data.album, copiedBytes: 0, totalBytes: 0, copiedFiles: 0, totalFiles: 0, etaSeconds: 0 }
                 break
             case 'usb_export_progress':
-                usbExport.value = { active: true, album: msg.data.album, copied: msg.data.copied, total: msg.data.total }
+                usbExport.value = { 
+                    active: true, 
+                    album: msg.data.album, 
+                    copiedBytes: msg.data.copiedBytes,
+                    totalBytes: msg.data.totalBytes,
+                    copiedFiles: msg.data.copiedFiles,
+                    totalFiles: msg.data.totalFiles,
+                    etaSeconds: msg.data.etaSeconds,
+                }
                 break
             case 'usb_export_success':
-                usbExport.value.copied = usbExport.value.total
+                usbExport.value.copiedBytes = usbExport.value.totalBytes
                 setTimeout(() => {
                     usbExport.value.active = false
-                }, 3000)
+                }, 4000)
                 break
             case 'usb_export_error':
                 usbExport.value.error = msg.data.message

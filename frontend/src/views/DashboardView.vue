@@ -26,7 +26,7 @@
 
         <main class="max-w-7xl mx-auto px-6 py-6 space-y-6">
 
-            <!-- USB Export Progress Banner -->
+            <!-- USB Export Progress Banner (appears at top when active) -->
             <div v-if="photobooth.usbExport.active"
                 class="bg-indigo-900/50 border border-indigo-700/50 rounded-lg p-4 flex flex-col gap-2 relative overflow-hidden backdrop-blur-sm shadow-xl shadow-indigo-900/10">
                 <div class="flex justify-between items-center text-sm font-medium">
@@ -35,16 +35,22 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                 d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                         </svg>
-                        Kopiere Bilder auf USB-Stick ({{ photobooth.usbExport.album }})...
+                        Kopiere auf USB... ({{ photobooth.usbExport.album }})
                     </span>
-                    <span class="text-indigo-300 font-mono">{{ photobooth.usbExport.copied }} / {{
-                        photobooth.usbExport.total }}</span>
+                    <span class="text-indigo-300 font-mono">
+                        {{ formatBytes(photobooth.usbExport.copiedBytes) }} / {{
+                            formatBytes(photobooth.usbExport.totalBytes) }}
+                    </span>
                 </div>
                 <div class="w-full h-2 bg-indigo-950/50 rounded-full overflow-hidden mt-1">
-                    <div class="h-full bg-indigo-500 transition-all duration-300 rounded-full relative"
-                        :style="{ width: (photobooth.usbExport.total > 0 ? (photobooth.usbExport.copied / photobooth.usbExport.total) * 100 : 0) + '%' }">
-                        <div class="absolute inset-0 bg-white/20"></div>
+                    <div class="h-full bg-indigo-500 transition-all duration-300 rounded-full"
+                        :style="{ width: (photobooth.usbExport.totalBytes > 0 ? (photobooth.usbExport.copiedBytes / photobooth.usbExport.totalBytes) * 100 : 0) + '%' }">
                     </div>
+                </div>
+                <div class="flex justify-between text-xs text-indigo-400/70">
+                    <span>{{ photobooth.usbExport.copiedFiles }} / {{ photobooth.usbExport.totalFiles }} Dateien</span>
+                    <span v-if="photobooth.usbExport.etaSeconds > 0">ETA: {{ formatEta(photobooth.usbExport.etaSeconds)
+                    }}</span>
                 </div>
                 <div v-if="photobooth.usbExport.error"
                     class="text-red-400 text-xs mt-1 font-semibold flex items-center gap-1">
@@ -54,12 +60,12 @@
                     </svg>
                     Fehler: {{ photobooth.usbExport.error }}
                 </div>
-                <div v-else-if="photobooth.usbExport.copied > 0 && photobooth.usbExport.copied === photobooth.usbExport.total"
+                <div v-else-if="photobooth.usbExport.copiedBytes > 0 && photobooth.usbExport.copiedBytes === photobooth.usbExport.totalBytes"
                     class="text-emerald-400 text-xs mt-1 font-semibold flex items-center gap-1">
                     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                     </svg>
-                    Kopiervorgang abgeschlossen! Der USB-Stick kann jetzt sicher entfernt werden.
+                    Fertig! Bitte Stick jetzt sicher entfernen.
                 </div>
             </div>
 
@@ -124,6 +130,21 @@ async function updateGalleryCount() {
     if (photobooth.settings.currentAlbum || editSettings.currentAlbum) {
         galleryCount.value = await photobooth.fetchGalleryCount(photobooth.settings.currentAlbum || editSettings.currentAlbum);
     }
+}
+
+function formatBytes(bytes: number): string {
+    if (!bytes) return '0 B';
+    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return Math.round(bytes / 1024) + ' KB';
+}
+
+function formatEta(secs: number): string {
+    if (!secs || secs <= 0) return '...';
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
 }
 </script>
 

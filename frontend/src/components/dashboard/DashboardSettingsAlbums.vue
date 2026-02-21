@@ -117,7 +117,7 @@
                                 :class="localSettings.currentAlbum === album.id ? 'bg-emerald-400' : 'bg-transparent'">
                             </div>
                             <span class="font-medium text-white text-lg truncate" :title="album.name">{{ album.name
-                            }}</span>
+                                }}</span>
                             <span v-if="album.captureMethod"
                                 class="text-[10px] font-mono bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700">Methode
                                 {{ album.captureMethod }}</span>
@@ -160,9 +160,10 @@
         <div class="pt-6 border-t border-zinc-800">
             <div class="flex items-center justify-between mb-4">
                 <label class="block text-xs text-zinc-500 uppercase tracking-wider">USB Export</label>
-                <button @click="photobooth.fetchUsbDevices()"
+                <button @click="refreshUsb"
                     class="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"
+                        :class="{ 'animate-spin': usbLoading }">
                         <path fill-rule="evenodd"
                             d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z"
                             clip-rule="evenodd" />
@@ -175,49 +176,91 @@
                 class="text-sm text-zinc-500 bg-zinc-950/50 p-4 rounded-lg border border-zinc-800/50 text-center">
                 Kein USB-Speicher erkannt. Bitte Stick einstecken und aktualisieren.
             </div>
-            <div v-else class="space-y-3">
+            <div v-else class="space-y-4">
                 <div v-for="dev in photobooth.usbDevices" :key="dev.name"
                     class="flex flex-col p-4 bg-zinc-950 border border-zinc-800 rounded-lg gap-3">
+
+                    <!-- Device Header -->
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                         <div class="flex flex-col">
                             <span class="text-sm font-medium text-white">{{ dev.label || 'USB Stick' }} <span
                                     class="text-zinc-500 text-xs ml-2">({{ dev.size }})</span></span>
                             <span class="text-xs text-zinc-500 font-mono">{{ dev.name }}</span>
                         </div>
-                        <div
-                            class="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded inline-flex self-start sm:self-auto border border-emerald-400/20">
-                            Frei: {{ dev.free || 'Unbekannt (Bitte mounten)' }}
+                        <div class="flex items-center gap-2">
+                            <div class="text-xs px-2 py-1 rounded inline-flex self-start sm:self-auto border"
+                                :class="dev.free ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' : 'text-zinc-500 bg-zinc-800 border-zinc-700'">
+                                Frei: {{ dev.free || 'Unbekannt' }}
+                            </div>
+                            <!-- Safely Remove Button -->
+                            <button @click.stop="safelyRemove(dev.name)" :disabled="photobooth.usbExport.active"
+                                title="Sicher entfernen"
+                                class="text-xs px-2 py-1 rounded border border-zinc-700 text-zinc-400 hover:text-orange-400 hover:border-orange-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                                ⏏ Entfernen
+                            </button>
                         </div>
                     </div>
 
-                    <div
-                        class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-zinc-900">
-                        <select v-model="pendingExportMode[dev.name]"
-                            class="bg-zinc-900 border border-zinc-800 rounded px-2 py-2 sm:py-1.5 text-xs text-zinc-300 focus:outline-none focus:border-blue-500 w-full sm:w-auto">
-                            <option value="jpeg_only">Nur JPEG kopieren</option>
-                            <option value="raw_jpeg">RAW & JPEG kopieren</option>
-                        </select>
-                        <button @click="startUsbExport(dev.name)" :disabled="exporting"
-                            class="px-4 py-2 text-xs font-medium bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white rounded transition-colors flex items-center justify-center gap-2 w-full sm:w-auto">
-                            <span v-if="exporting"
-                                class="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-                            {{ exporting ? 'Kopiere...' : `"${localSettings.currentAlbum}" exportieren` }}
-                        </button>
+                    <!-- Space Warning -->
+                    <div v-if="spaceWarning(dev)"
+                        class="text-xs text-orange-400 bg-orange-900/20 border border-orange-800/30 rounded px-3 py-2 flex items-center gap-2">
+                        <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                        </svg>
+                        Möglicherweise nicht genug freier Speicher für alle {{ formatAlbumSize(albumOriginalSize) }}
+                        Originaldateien.
                     </div>
-                    <p v-if="pendingExportMode[dev.name] === 'raw_jpeg'" class="text-[10px] text-zinc-500">
-                        Hinweis: Fehlende RAW Dateien werden via USB direkt von der Kamera geladen (Kann länger dauern).
-                    </p>
+
+                    <!-- Export / Cancel Button -->
+                    <div class="flex items-center gap-2 pt-2 border-t border-zinc-900">
+                        <button v-if="!photobooth.usbExport.active" @click="startUsbExport(dev.name)"
+                            class="flex-1 px-4 py-2 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors flex items-center justify-center gap-2">
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                            </svg>
+                            Originale auf Stick kopieren
+                        </button>
+                        <template v-else-if="photobooth.usbExport.active">
+                            <!-- Progress UI -->
+                            <div class="flex-1 flex flex-col gap-1.5">
+                                <div class="flex justify-between text-xs text-zinc-400">
+                                    <span class="text-blue-400 font-medium">{{
+                                        formatBytes(photobooth.usbExport.copiedBytes) }} / {{
+                                            formatBytes(photobooth.usbExport.totalBytes) }}</span>
+                                    <span>{{ photobooth.usbExport.copiedFiles }} / {{ photobooth.usbExport.totalFiles }}
+                                        Dateien · ETA {{ formatEta(photobooth.usbExport.etaSeconds) }}</span>
+                                </div>
+                                <div class="w-full h-2 bg-zinc-800 rounded-full overflow-hidden">
+                                    <div class="h-full bg-blue-500 transition-all duration-300 rounded-full"
+                                        :style="{ width: (photobooth.usbExport.totalBytes > 0 ? (photobooth.usbExport.copiedBytes / photobooth.usbExport.totalBytes) * 100 : 0) + '%' }">
+                                    </div>
+                                </div>
+                            </div>
+                            <button @click="cancelExport"
+                                class="px-3 py-2 text-xs font-medium bg-red-900/30 hover:bg-red-900/60 text-red-400 border border-red-800 rounded transition-colors">
+                                Abbrechen
+                            </button>
+                        </template>
+                    </div>
+
+                    <!-- Error/Success message -->
+                    <div v-if="photobooth.usbExport.error" class="text-xs text-red-400 flex items-center gap-1">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        {{ photobooth.usbExport.error }}
+                    </div>
                 </div>
             </div>
-            <p v-if="exportMessage" class="mt-2 text-xs" :class="exportSuccess ? 'text-emerald-400' : 'text-red-400'">
-                {{ exportMessage }}
-            </p>
         </div>
     </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue';
+import { ref, computed } from 'vue';
 import { usePhotoboothStore } from '../../stores/photobooth';
 
 const props = defineProps<{
@@ -246,10 +289,65 @@ const pendingAlbumName = ref('');
 const pendingCaptureMethod = ref('C');
 const savingAlbum = ref(false);
 
-const exporting = ref(false);
-const exportMessage = ref('');
-const exportSuccess = ref(false);
-const pendingExportMode = reactive<Record<string, string>>({});
+const usbLoading = ref(false);
+
+async function refreshUsb() {
+    usbLoading.value = true;
+    await photobooth.fetchUsbDevices();
+    usbLoading.value = false;
+}
+
+// Size of the current album's `original` folder (from album.size if method counts it)
+const albumOriginalSize = computed(() => {
+    const album = photobooth.albums.find(a => a.id === localSettings.value.currentAlbum);
+    return album ? album.size : 0;
+});
+
+function spaceWarning(dev: any): boolean {
+    if (!dev.free || albumOriginalSize.value === 0) return false;
+    // Parse free space string like "12G" or "800M"
+    const raw = dev.free.toUpperCase();
+    let freeBytes = 0;
+    if (raw.endsWith('G')) freeBytes = parseFloat(raw) * 1024 * 1024 * 1024;
+    else if (raw.endsWith('M')) freeBytes = parseFloat(raw) * 1024 * 1024;
+    else if (raw.endsWith('K')) freeBytes = parseFloat(raw) * 1024;
+    else freeBytes = parseFloat(raw);
+    return albumOriginalSize.value > freeBytes;
+}
+
+function formatBytes(bytes: number): string {
+    if (!bytes) return '0 B';
+    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return Math.round(bytes / 1024) + ' KB';
+}
+
+function formatEta(secs: number): string {
+    if (!secs || secs <= 0) return '...';
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+}
+
+async function safelyRemove(deviceName: string) {
+    if (photobooth.usbExport.active) return;
+    if (!confirm(`Gerät "${deviceName}" jetzt sicher entfernen?`)) return;
+    const res = await fetch('/api/usb/unmount', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceName })
+    });
+    if (res.ok) {
+        await photobooth.fetchUsbDevices();
+    } else {
+        alert('Entfernen fehlgeschlagen: ' + await res.text());
+    }
+}
+
+async function cancelExport() {
+    await fetch('/api/usb/export/cancel', { method: 'POST' });
+};
 
 function formatAlbumSize(bytes: number) {
     if (!bytes) return '0 MB';
@@ -347,23 +445,12 @@ async function deleteGallery(albumId: string) {
 }
 
 async function startUsbExport(deviceName: string) {
-    if (!confirm(`Album "${localSettings.value.currentAlbum}" auf "${deviceName}" kopieren?`)) return;
+    if (photobooth.usbExport.active) { alert('Ein Export läuft bereits!'); return; }
+    if (!confirm(`Originaldateien von "${localSettings.value.currentAlbum}" auf "${deviceName}" kopieren?`)) return;
 
-    exporting.value = true;
-    exportMessage.value = 'Export läuft asynchron im Hintergrund...';
-    exportSuccess.value = true;
-
-    const mode = pendingExportMode[deviceName] || 'jpeg_only';
-
-    const res = await photobooth.exportToUsb(deviceName, localSettings.value.currentAlbum, mode);
+    const res = await photobooth.exportToUsb(deviceName, localSettings.value.currentAlbum, 'jpeg_only');
     if (!res.success) {
-        exportSuccess.value = false;
-        exportMessage.value = 'Export Fehler: ' + res.error;
+        alert('Export Fehler: ' + res.error);
     }
-
-    setTimeout(() => {
-        exporting.value = false;
-        exportMessage.value = '';
-    }, 3000);
 }
 </script>

@@ -214,7 +214,7 @@ const photobooth = usePhotoboothStore();
 const modeStore = useClientModeStore();
 const gallery = useGalleryStore();
 const exitLock = useExitLock();
-const { exitFullscreen } = useFullscreen();
+const { exitFullscreen, enterFullscreen } = useFullscreen();
 const router = useRouter();
 
 const mode = computed(() => modeStore.modeDefinition);
@@ -258,6 +258,10 @@ watch(() => photobooth.state, (newVal) => {
 });
 
 function handleTap() {
+    // Aggressively re-enter fullscreen on every tap (user may have dismissed it)
+    if (!exitLock.isUnlocked.value) {
+        enterFullscreen();
+    }
     if (exitLock.isUnlocked.value) return;
     exitLock.tap();
 }
