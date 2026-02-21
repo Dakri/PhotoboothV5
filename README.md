@@ -117,6 +117,84 @@ cd frontend && npm install && npm run dev
 
 ---
 
+### Verfügbare Modi
+
+| Modus | Buzzer | Countdown | Vorschau | Galerie |
+|---|:---:|:---:|:---:|:---:|
+| **Vollständig** | ✅ | ✅ | ✅ | — |
+| **Auslöser + Countdown** | ✅ | ✅ | — | — |
+| **Monitor + Vorschau** | — | ✅ | ✅ | — |
+| **Nur Vorschau** | — | — | ✅ | — |
+| **Nur Countdown** | — | ✅ | — | — |
+| **Galerie** | — | — | — | ✅ |
+
+
+### Fullscreen
+
+- Wird automatisch beim Moduswahl aktiviert
+- Cross-Browser-kompatibel (webkit, moz, ms Prefixes)
+
+
+---
+
+## Dashboard
+
+Das Admin-Dashboard (`/`) bietet:
+
+- **System-State** mit farbigem Status-Indikator
+- **Trigger-Button** zum manuellen Auslösen
+- **Letztes Foto** als Vorschau
+- **Kamera-Info** – Modell, Akku-Level (Farbbalken), Objektiv, freier Speicher
+- **Live-Logs** – Monospace Log-Viewer mit farbcodierten Levels, Auto-Scroll
+- **Uptime & Client-Count** im Header
+
+
+
+## API Referenz
+
+### REST Endpoints
+
+| Methode | Route | Beschreibung |
+|---|---|---|
+| `GET` | `/api/status` | Server-Status (State, Clients, Uptime) |
+| `POST` | `/api/trigger` | Foto auslösen |
+| `GET` | `/api/photos` | Foto-Liste |
+| `GET` | `/api/photos/latest` | Letztes Foto |
+| `GET` | `/api/logs?limit=100` | Server-Logs (Ring-Buffer) |
+| `GET` | `/api/legacy/poll` | Kombinierter Status für Legacy-Client |
+
+### WebSocket Events
+
+Verbindung über `ws://192.168.4.1/ws`
+
+**Client → Server:**
+
+| Event | Daten | Beschreibung |
+|---|---|---|
+| `register` | `{ role: "buzzer-countdown-preview" }` | Client-Modus registrieren |
+| `trigger` | – | Foto auslösen |
+
+**Server → Client:**
+
+| Event | Daten | Beschreibung |
+|---|---|---|
+| `status` | `{ state: "idle" }` | Zustandsänderung |
+| `countdown` | `{ remaining: 3, total: 5 }` | Countdown-Tick |
+| `photo_ready` | `{ filename, url, thumbUrl }` | Foto bereit |
+| `log` | `{ level, source, message, timestamp }` | Log-Eintrag (Live) |
+| `error` | `{ message }` | Fehler |
+
+### Zustandsmaschine
+
+```
+idle → countdown → capturing → processing → preview → idle
+                                                 ↑
+                                           (nach 8 Sekunden)
+```
+
+---
+
+
 ## Lizenz
 
 MIT
