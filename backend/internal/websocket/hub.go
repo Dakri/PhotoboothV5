@@ -18,6 +18,7 @@ const (
 	EventTypeCountdown = "countdown"
 	EventTypePhoto     = "photo_ready"
 	EventTypeLog       = "log"
+	EventTypeSystem    = "system_info"
 	TypeError          = "error"
 )
 

@@ -23,6 +23,11 @@ func NewManager(rootDir string) *Manager {
 	return &Manager{rootDir: rootDir}
 }
 
+// SetRootDir updates the root directory (used when switching albums).
+func (m *Manager) SetRootDir(dir string) {
+	m.rootDir = dir
+}
+
 func (m *Manager) EnsureDirs() {
 	dirs := []string{"original", "preview", "thumb"}
 	for _, d := range dirs {

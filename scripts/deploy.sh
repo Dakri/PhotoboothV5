@@ -27,6 +27,9 @@ echo "🚀 Deploying to $TARGET..."
 # 1. Build
 ./scripts/build-pi.sh
 
+# 1.5 remove old files on target . keep user.conf.json and data
+ssh $SSH_OPTS "$TARGET" "sudo rm -rf /opt/photobooth/public && sudo rm -rf /opt/photobooth/scripts && sudo rm -rf /opt/photobooth/photobooth"
+
 # 2. Transfer
 echo "📡 Transferring files..."
 

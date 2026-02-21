@@ -1,0 +1,30 @@
+{
+  "camera": {
+    "enabled": true,
+    "mock": false
+  },
+  "booth": {
+    "countdownSeconds": 3,
+    "previewDisplaySeconds": 5,
+    "triggerDelayMs": -400,
+    "photosBasePath": "data/photos",
+    "currentAlbum": "default"
+  },
+  "image": {
+    "previewWidth": 1024,
+    "previewQuality": 85,
+    "thumbnailWidth": 256,
+    "thumbnailQuality": 85,
+    "keepOriginal": true
+  },
+  "wifi": {
+    "enabled": true,
+    "ssid": "Photobooth",
+    "password": "",
+    "interface": "wlan0",
+    "ipAddress": "192.168.4.1",
+    "dhcpRangeStart": "192.168.4.10",
+    "dhcpRangeEnd": "192.168.4.100",
+    "captivePortal": true
+  }
+}

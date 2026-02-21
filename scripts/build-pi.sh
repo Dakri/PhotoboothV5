@@ -3,8 +3,12 @@ set -e
 
 echo "🏗️  Building Photobooth V5 for Raspberry Pi (ARM64)..."
 
+# 0. Clean workspace
+echo "🗑️  Removing old dist directory..."
+rm -rf dist
+
 # 1. Build Frontend
-echo "📦 Skipping Building Frontend... on Pi"
+echo "📦 Building Frontend... "
 cd frontend
 npm run build
 cd ..
@@ -19,6 +23,7 @@ go mod tidy
 # For now, pure Go.
 env GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ../dist/photobooth ./cmd/server
 cd ..
+
 
 # 3. Copy Static Assets
 echo "📂 Copying assets..."
@@ -46,9 +51,10 @@ mkdir -p dist/config
 # So running build in frontend/ puts files in photobooth/public/frontend.
 # We want to move everything to dist/ for the release.
 
+
 cp -r public dist/
 cp -r legacy dist/public/
-cp config/default.json dist/config/
+cp config/server.conf.json dist/config/
 cp -r scripts dist/
 
 echo "✅ Build Complete! artifacts are in dist/"

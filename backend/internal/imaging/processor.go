@@ -1,9 +1,13 @@
 package imaging
 
 import (
-	"log"
+	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"photobooth/internal/config"
+	"photobooth/internal/logging"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,60 +15,96 @@ import (
 )
 
 type Processor struct {
-	config config.ImageConfig
+	config  config.ImageConfig
+	log     *logging.Logger
+	useEpeg bool
 }
 
 func NewProcessor(cfg config.ImageConfig) *Processor {
-	return &Processor{
+	p := &Processor{
 		config: cfg,
+		log:    logging.Get(),
 	}
+
+	// Check if epeg is available
+	if path, err := exec.LookPath("epeg"); err == nil && path != "" {
+		p.useEpeg = true
+		p.log.Info("imaging", "Using 'epeg' for fast JPEG processing")
+	} else {
+		p.log.Info("imaging", "'epeg' not found – using native Go imaging (slower)")
+	}
+
+	return p
 }
 
-func (p *Processor) Process(originalPath string) error {
+func (p *Processor) Process(originalPath string, onPreviewReady func()) error {
 	start := time.Now()
-
-	// Open src image
-	src, err := imaging.Open(originalPath, imaging.AutoOrientation(true))
-	if err != nil {
-		return err
-	}
-
-	dir := filepath.Dir(originalPath)
 	filename := filepath.Base(originalPath)
-
-	// Paths
-	// Assuming originalPath is .../data/photos/original/IMG.jpg
-	// We want .../data/photos/preview/IMG.jpg
-	// and .../data/photos/thumb/IMG.jpg
-
-	// Hacky path manipulation based on known structure, better to pass base dir
-	// But let's assume standard structure: data/photos/{original,preview,thumb}
-	baseDir := filepath.Dir(dir) // data/photos
+	baseDir := filepath.Dir(filepath.Dir(originalPath)) // data/photos
 	previewPath := filepath.Join(baseDir, "preview", filename)
 	thumbPath := filepath.Join(baseDir, "thumb", filename)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	// Function to generate image (either via epeg or go-native)
+	generate := func(destPath string, width int, quality int) error {
+		defer wg.Done()
+
+		if p.useEpeg {
+			// Try epeg first
+			// Use -m (max dimension) instead of -w to handle portrait/landscape better
+			cmd := exec.Command("epeg",
+				"-m", fmt.Sprintf("%d", width),
+				"-q", fmt.Sprintf("%d", quality),
+				originalPath, destPath)
+
+			if out, err := cmd.CombinedOutput(); err == nil {
+				// Success? Check file size to catch "solid color" bug
+				if info, err := os.Stat(destPath); err == nil && info.Size() > 3000 {
+					return nil // EPEG worked and produced a reasonable file
+				} else {
+					p.log.Warn("imaging", "EPEG produced suspicious file (size=%d), falling back to Go", info.Size())
+					// Proceed to fallback...
+				}
+			} else {
+				p.log.Warn("imaging", "EPEG failed: %v – %s", err, strings.TrimSpace(string(out)))
+				// Proceed to fallback...
+			}
+		}
+
+		// Fallback: Go native
+		// Re-open source for each thread to be safe/simple
+		src, err := imaging.Open(originalPath, imaging.AutoOrientation(true))
+		if err != nil {
+			return err
+		}
+
+		// Resize (using Fit to match -m max dimension behavior)
+		dst := imaging.Fit(src, width, width, imaging.Lanczos)
+		return imaging.Save(dst, destPath, imaging.JPEGQuality(quality))
+	}
+
 	// Generate Preview
 	go func() {
-		defer wg.Done()
-		dst := imaging.Fit(src, p.config.PreviewWidth, p.config.PreviewWidth, imaging.Lanczos)
-		if err := imaging.Save(dst, previewPath, imaging.JPEGQuality(80)); err != nil {
-			log.Printf("❌ Failed to save preview: %v", err)
+		err := generate(previewPath, p.config.PreviewWidth, p.config.PreviewQuality)
+		if err != nil {
+			p.log.Error("imaging", "Failed to generate preview: %v", err)
+			// Try fallback if epeg failed?
+		} else if onPreviewReady != nil {
+			onPreviewReady()
 		}
 	}()
 
 	// Generate Thumbnail
 	go func() {
-		defer wg.Done()
-		dst := imaging.Thumbnail(src, p.config.ThumbWidth, p.config.ThumbWidth, imaging.Lanczos)
-		if err := imaging.Save(dst, thumbPath, imaging.JPEGQuality(70)); err != nil {
-			log.Printf("❌ Failed to save thumbnail: %v", err)
+		err := generate(thumbPath, p.config.ThumbWidth, p.config.ThumbQuality)
+		if err != nil {
+			p.log.Error("imaging", "Failed to generate thumbnail: %v", err)
 		}
 	}()
 
 	wg.Wait()
-	log.Printf("✅ Processed image in %v", time.Since(start))
+	p.log.Info("imaging", "Processed %s in %v (epeg=%v)", filename, time.Since(start).Round(time.Millisecond), p.useEpeg)
 	return nil
 }

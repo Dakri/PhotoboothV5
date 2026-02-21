@@ -15,8 +15,56 @@ export interface CameraInfo {
     serialNumber: string
     lensName: string
     batteryLevel: string
+    batteryPercent?: number
     storageTotal: string
     storageFree: string
+    storagePercent?: number
+}
+
+export interface CameraFile {
+    name: string
+    size: number
+}
+
+export interface DiskInfo {
+    total: number
+    free: number
+    used: number
+    usedPercent: number
+}
+
+export interface BoothSettings {
+    countdownSeconds: number
+    previewDisplaySeconds: number
+    photosBasePath: string
+    currentAlbum: string
+    captureStrategy: string
+    triggerDelayMs: number
+}
+
+export interface AlbumInfo {
+    id: string
+    name: string
+    count: number
+    size: number
+    captureMethod: string
+}
+
+export interface UsbDevice {
+    name: string
+    label: string
+    mountpoint: string
+    size: string
+    subsystems: string
+    free?: string
+}
+
+export interface UsbExportProgress {
+    active: boolean
+    album: string
+    copied: number
+    total: number
+    error?: string
 }
 
 export const usePhotoboothStore = defineStore('photobooth', () => {
@@ -28,6 +76,7 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
     const error = ref<string | null>(null)
     const clients = ref(0)
     const logs = ref<LogEntry[]>([])
+    const cameraFiles = ref<CameraFile[]>([])
     const uptime = ref('00:00')
     const cameraInfo = ref<CameraInfo>({
         connected: false,
@@ -36,9 +85,28 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
         serialNumber: '',
         lensName: '',
         batteryLevel: '',
+        batteryPercent: 0,
         storageTotal: '',
-        storageFree: ''
+        storageFree: '',
+        storagePercent: 0
     })
+    const diskInfo = ref<DiskInfo>({
+        total: 0,
+        free: 0,
+        used: 0,
+        usedPercent: 0
+    })
+    const settings = ref<BoothSettings>({
+        countdownSeconds: 3,
+        previewDisplaySeconds: 5,
+        photosBasePath: 'data/photos',
+        currentAlbum: 'default',
+        captureStrategy: 'C',
+        triggerDelayMs: 0
+    })
+    const albums = ref<AlbumInfo[]>([])
+    const usbDevices = ref<UsbDevice[]>([])
+    const usbExport = ref<UsbExportProgress>({ active: false, album: '', copied: 0, total: 0 })
 
     // WebSocket
     let ws: WebSocket | null = null
@@ -94,6 +162,10 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
                 lastPhoto.value = msg.data
                 state.value = 'preview'
                 break
+            case 'system_info':
+                if (msg.data.camera) cameraInfo.value = msg.data.camera
+                if (msg.data.disk) diskInfo.value = msg.data.disk
+                break
             case 'error':
                 error.value = msg.data.message
                 state.value = 'error'
@@ -101,6 +173,25 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
                 break
             case 'log':
                 addLog(msg.data)
+                break
+            case 'usb_export_start':
+                usbExport.value = { active: true, album: msg.data.album, copied: 0, total: 0 }
+                break
+            case 'usb_export_progress':
+                usbExport.value = { active: true, album: msg.data.album, copied: msg.data.copied, total: msg.data.total }
+                break
+            case 'usb_export_success':
+                usbExport.value.copied = usbExport.value.total
+                setTimeout(() => {
+                    usbExport.value.active = false
+                }, 3000)
+                break
+            case 'usb_export_error':
+                usbExport.value.error = msg.data.message
+                setTimeout(() => {
+                    usbExport.value.active = false
+                    usbExport.value.error = undefined
+                }, 5000)
                 break
         }
     }
@@ -135,9 +226,48 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
                 if (data.camera) {
                     cameraInfo.value = data.camera
                 }
+                if (data.disk) {
+                    diskInfo.value = data.disk
+                }
+                if (data.lastPhoto) {
+                    lastPhoto.value = data.lastPhoto
+                }
             }
         } catch (e) {
             console.error('Failed to fetch status:', e)
+        }
+    }
+
+    async function fetchSettings() {
+        try {
+            const res = await fetch('/api/settings')
+            if (res.ok) {
+                const data = await res.json()
+                if (data.booth) settings.value = data.booth
+                if (data.albums) albums.value = data.albums
+            }
+        } catch (e) {
+            console.error('Failed to fetch settings:', e)
+        }
+    }
+
+    async function saveSettings(s: Partial<BoothSettings & { currentAlbum: string }>) {
+        try {
+            const res = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(s)
+            })
+            if (res.ok) {
+                const data = await res.json()
+                if (data.booth) settings.value = data.booth
+                if (data.albums) albums.value = data.albums
+                return { success: true, data }
+            }
+            return { success: false, error: 'Request failed' }
+        } catch (e) {
+            console.error('Failed to save settings:', e)
+            return { success: false, error: String(e) }
         }
     }
 
@@ -159,6 +289,81 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
         ws.send(JSON.stringify({ type: 'register', data: { role } }))
     }
 
+    async function fetchGalleryCount(album: string) {
+        try {
+            const res = await fetch(`/api/gallery/count?album=${encodeURIComponent(album)}`)
+            const data = await res.json()
+            return data.count || 0
+        } catch (e) {
+            console.error('Failed to fetch gallery count:', e)
+            return 0
+        }
+    }
+
+    async function emptyGallery(album: string) {
+        try {
+            const res = await fetch(`/api/gallery/empty?album=${encodeURIComponent(album)}`, { method: 'POST' })
+            return res.ok
+        } catch (e) {
+            console.error('Failed to empty gallery:', e)
+            return false
+        }
+    }
+
+    async function deleteGallery(album: string) {
+        try {
+            const res = await fetch(`/api/gallery/delete?album=${encodeURIComponent(album)}`, { method: 'POST' })
+            if (!res.ok) {
+                const txt = await res.text()
+                throw new Error(txt)
+            }
+            return { success: true }
+        } catch (e) {
+            console.error('Failed to delete gallery:', e)
+            return { success: false, error: String(e) }
+        }
+    }
+
+    async function fetchUsbDevices() {
+        try {
+            const res = await fetch('/api/usb/devices')
+            if (res.ok) {
+                usbDevices.value = await res.json() || []
+            }
+        } catch (e) {
+            console.error('Failed to fetch USB devices:', e)
+        }
+    }
+
+    async function fetchCameraFiles() {
+        try {
+            const res = await fetch('/api/camera/files')
+            if (res.ok) {
+                cameraFiles.value = await res.json() || []
+            }
+        } catch (e) {
+            console.error('Failed to fetch camera files:', e)
+        }
+    }
+
+    async function exportToUsb(deviceName: string, albumName: string, copyMode?: string) {
+        try {
+            const res = await fetch('/api/usb/export', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ deviceName, albumName, copyMode })
+            })
+            if (!res.ok) {
+                const txt = await res.text()
+                throw new Error(txt)
+            }
+            return { success: true }
+        } catch (e) {
+            console.error('Failed to export to USB:', e)
+            return { success: false, error: String(e) }
+        }
+    }
+
     return {
         connected,
         state,
@@ -169,11 +374,25 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
         logs,
         uptime,
         cameraInfo,
+        diskInfo,
+        settings,
+        albums,
+        usbDevices,
+        cameraFiles,
         connect,
         trigger,
         register,
         fetchLogs,
         fetchStatus,
-        addLog
+        fetchSettings,
+        saveSettings,
+        addLog,
+        fetchGalleryCount,
+        emptyGallery,
+        deleteGallery,
+        fetchUsbDevices,
+        fetchCameraFiles,
+        exportToUsb,
+        usbExport
     }
 })

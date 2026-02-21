@@ -1,20 +1,20 @@
 # PhotoboothV5 – Technische Dokumentation
 
 > Referenz-Dokument für die gesamte Entwicklung.  
-> Hier sind alle Module, Abläufe, Schnittstellen und Design-Entscheidungen dokumentiert.
+> Alle Module, Abläufe, Schnittstellen und Design-Entscheidungen.
 
 ---
 
 ## Inhaltsverzeichnis
 
 1. [Design-Prinzipien](#design-prinzipien)
-2. [Backend Module](#backend-module)
+2. [Backend Module (Go)](#backend-module-go)
 3. [Event-Flow & Zustandsmaschine](#event-flow--zustandsmaschine)
 4. [Frontend Architektur](#frontend-architektur)
-5. [Legacy Client](#legacy-client)
-6. [Netzwerk & WLAN](#netzwerk--wlan)
-7. [Authentifizierung](#authentifizierung)
-8. [Dateistruktur & Namenskonventionen](#dateistruktur--namenskonventionen)
+5. [Client-Mode-System](#client-mode-system)
+6. [Legacy Client](#legacy-client)
+7. [Netzwerk & WLAN](#netzwerk--wlan)
+8. [Logging-System](#logging-system)
 9. [Build & Deployment](#build--deployment)
 10. [Bekannte Limitierungen](#bekannte-limitierungen)
 
@@ -25,12 +25,13 @@
 ### 1. Standalone – Keine externen Abhängigkeiten zur Laufzeit
 - Kein Internet nötig
 - Kein Docker, kein externer Dienst
+- Single Binary – kein Node.js, kein Python
 - Alles läuft auf dem Pi alleine
 
-### 2. Minimale Installation
-- `npm install` + `npm run build` + `install.sh`
-- Keine langen Setup-Scripts die apt-Pakete installieren
-- Vorbedingung: Node.js + gphoto2 (2 Pakete per apt)
+### 2. Single Binary Deployment
+- Go-Backend kompiliert zu einem Binary
+- Frontend wird eingebettet als statische Dateien
+- Nur `gphoto2` als System-Dependency nötig
 
 ### 3. Graceful Degradation
 - Kamera nicht da? → Mock-Modus oder klare Fehlermeldung
@@ -39,47 +40,50 @@
 - WebSocket nicht verfügbar? → REST Polling
 
 ### 4. Alles konfigurierbar
-- `config/default.json` = Basis-Einstellungen
-- `data/config.json` = Laufzeit-Überschreibungen (via Dashboard/API)
+- `config.json` = Basis-Einstellungen
 - Kein Hardcoded-Wert im Code
 
 ---
 
-## Backend Module
+## Backend Module (Go)
 
-### `config.ts` – Konfigurationsmanagement
+### `cmd/server/main.go` – Entry Point
 
-**Aufgabe:** Zentrale Konfiguration laden, mergen, und bereitstellen.
+**Ablauf:**
+1. Logger initialisieren (Ring-Buffer)
+2. `config.json` laden
+3. Verzeichnisse erstellen (`data/photos/original/`, `preview/`, `thumb/`)
+4. Module initialisieren: Camera, Imaging, Storage, WebSocket Hub, App Controller
+5. Log-Broadcast-Funktion registrieren (Logger → WebSocket)
+6. WiFi-Hotspot starten (wenn konfiguriert)
+7. DNS Server starten (Captive Portal, Port 53)
+8. HTTP Server starten (API + statische Dateien)
 
-**Verhalten:**
-1. Lädt `config/default.json` als Basis
-2. Falls `data/config.json` existiert → Deep-Merge über Defaults
-3. Exportiert `config` Singleton (Readonly zur Laufzeit)
+---
 
-**Wichtige Exports:**
-- `config: AppConfig` – Geladene Konfiguration
-- `saveRuntimeConfig(overrides)` – Überschreibungen in `data/config.json` speichern
-- `getPhotosDir()` – Absoluter Pfad zum Foto-Verzeichnis
-- `ensureDataDirs()` – Erstellt `original/`, `preview/`, `thumb/` falls nicht vorhanden
+### `internal/config/` – Konfiguration
 
-**Deep-Merge Logik:**
-```
-Default:  { image: { previewWidth: 800, thumbWidth: 200 } }
-Override: { image: { previewWidth: 600 } }
-Result:   { image: { previewWidth: 600, thumbWidth: 200 } }
+**Config-Struct:**
+```go
+type Config struct {
+    Server   ServerConfig   // Port
+    Camera   CameraConfig   // Mock, RetryCount
+    Image    ImageConfig    // PreviewWidth, ThumbWidth, Quality
+    Booth    BoothConfig    // CountdownSeconds, PreviewDisplaySeconds
+    WiFi     WiFiConfig     // SSID, Password, IP, Interface, Enabled
+    Storage  StorageConfig  // PhotosDir
+}
 ```
 
 ---
 
-### `camera/gphoto.ts` – Kamera-Steuerung
+### `internal/camera/gphoto.go` – Kamera-Steuerung
 
-**Aufgabe:** Canon DSLR via gphoto2 ansteuern.
-
-**Klasse: `CameraController`**
+**Controller mit Mutex-geschütztem Capture:**
 
 | Methode | Beschreibung |
 |---|---|
-| `Capture()` | Löst Foto aus und downloadet es, Mutex-geschützt |
+| `Capture()` | Löst Foto aus und downloadet es, gibt Dateipfad zurück |
 | `GetInfo()` | Gibt `CameraInfo` Struct zurück (Modell, Akku, Speicher, etc.) |
 
 **CameraInfo Struct:**
@@ -111,190 +115,141 @@ type CameraInfo struct {
 **Mock-Modus:**
 - `Capture()`: Erstellt eine Dummy-Datei, 1s simulierte Verzögerung
 - `GetInfo()`: Gibt statische Dummy-Daten zurück ("Canon EOS 700D (Mock)", 75% Akku, etc.)
-- Für Entwicklung ohne Kamera
-
-**gphoto2 Befehle:**
-```bash
-# Kamera erkennen
-gphoto2 --auto-detect
-
-# Foto aufnehmen und direkt herunterladen
-gphoto2 --capture-image-and-download --force-overwrite --filename /path/to/IMG.jpg
-
-# Kamera-Zusammenfassung (Model, Hersteller, Akku, etc.)
-gphoto2 --summary
-
-# Speicherinfo (Kapazität, freier Platz)
-gphoto2 --storage-info
-
-# Kamera-Einstellungen lesen
-gphoto2 --list-config
-```
 
 ---
 
-### `image/processor.ts` – Bildverarbeitung
+### `internal/imaging/` – Bildverarbeitung
 
-**Aufgabe:** Originalfotos in Preview und Thumbnail umwandeln.
+**Pure Go Implementierung mit `disintegration/imaging`:**
 
-**Funktion: `processPhoto(originalPath, filename)`**
-
-| Output | Breite | Qualität | Zweck |
+| Output | Breite | Format | Zweck |
 |---|---|---|---|
-| Preview | 800px (config) | 80% (config) | WLAN-taugliche Vorschau |
-| Thumbnail | 200px (config) | 70% (config) | Galerie-Übersicht |
+| Preview | 800px (config) | JPEG 80% | WLAN-taugliche Vorschau |
+| Thumbnail | 200px (config) | JPEG 70% | Galerie-Übersicht |
 
 **Verhalten:**
-- Preview und Thumbnail werden **parallel** generiert (`Promise.all`)
-- EXIF-Rotation wird automatisch korrigiert (`.rotate()`)
-- `withoutEnlargement: true` – Kleine Bilder werden nicht hochskaliert
-
-**Performance auf Pi 3:**
-- ~150-250ms pro Foto (Preview + Thumbnail)
-- sharp nutzt libvips mit ARM NEON Optimierungen
+- `Lanczos` Resampling für hohe Bildqualität
+- EXIF-Rotation wird automatisch korrigiert
+- Keine cgo-Abhängigkeiten
 
 ---
 
-### `storage/photos.ts` – Foto-Verwaltung
-
-**Aufgabe:** CRUD-Operationen für gespeicherte Fotos.
+### `internal/storage/` – Foto-Verwaltung
 
 | Funktion | Beschreibung |
 |---|---|
-| `listPhotos()` | Alle Fotos, sortiert nach Datum (neueste zuerst) |
-| `getPhoto(filename)` | Ein einzelnes Foto mit URLs |
-| `getLatestPhoto()` | Das neueste Foto |
-| `deletePhoto(filename)` | Löscht Original + Preview + Thumbnail |
-| `getStorageStats()` | Anzahl Fotos + Gesamtgröße in MB |
+| `ListPhotos()` | Alle Fotos, sortiert nach Datum (neueste zuerst) |
+| `GetLatestPhoto()` | Das neueste Foto mit URLs |
+| `DeletePhoto(filename)` | Löscht Original + Preview + Thumbnail |
 
 **PhotoEntry Format:**
-```typescript
-{
-  id: "IMG_20260219_143022",
-  filename: "IMG_20260219_143022.jpg",
-  timestamp: 1739972422000,
-  urls: {
-    original: "/photos/original/IMG_20260219_143022.jpg",
-    preview: "/photos/preview/IMG_20260219_143022.jpg",
-    thumbnail: "/photos/thumb/IMG_20260219_143022.jpg"
-  }
+```go
+type Photo struct {
+    Filename  string `json:"filename"`
+    Timestamp string `json:"timestamp"`
+    URL       string `json:"url"`
+    ThumbURL  string `json:"thumbUrl"`
 }
 ```
 
 ---
 
-### `storage/usb.ts` – USB-Export
+### `internal/websocket/` – WebSocket Hub
 
-**Aufgabe:** USB-Sticks erkennen und Fotos exportieren.
+**Hub verwaltet alle Client-Verbindungen:**
 
-**Erkennung:** `lsblk -J -o NAME,MOUNTPOINT,LABEL,HOTPLUG,TYPE`
-- Filtert nach `hotplug: true` + `type: "part"` + gemountet
+| Feature | Beschreibung |
+|---|---|
+| `Broadcast` Channel | Sendet Events an alle Clients |
+| `Register` / `Unregister` | Client an-/abmelden |
+| `ClientCount()` | Anzahl verbundener Clients |
+| `Run()` | Goroutine: Empfängt Broadcasts + neue Clients |
 
-**Export:**
-- Erstellt `Photobooth_Export/` auf dem Stick
-- Kopiert nur neue Dateien (Skip wenn bereits vorhanden)
-- Gibt Statistik zurück: `{ copied, skipped, errors }`
-
----
-
-### `websocket/events.ts` – Event-System
-
-**Aufgabe:** Typdefinitionen und Message-Factories für alle WebSocket Events.
-
-**Event-Typen:** `trigger`, `countdown`, `capturing`, `processing`, `photo_ready`, `error`, `status`, `register`, `clients_update`, `ping`, `pong`
-
-**Client-Rollen:** `dashboard`, `buzzer`, `display`, `gallery`, `hardware`
-
-**Message-Format:**
-```typescript
-{
-  type: "countdown",
-  data: { remaining: 3, total: 5 },
-  timestamp: 1739972422000
-}
+**Event-Typen:**
+```go
+const (
+    EventTypeStatus    = "status"
+    EventTypeCountdown = "countdown"
+    EventTypePhotoReady = "photo_ready"
+    EventTypeError     = "error"
+    EventTypeLog       = "log"
+)
 ```
 
 ---
 
-### `websocket/server.ts` – WebSocket Server
+### `internal/app/controller.go` – App Controller
 
-**Aufgabe:** Client-Verbindungen verwalten und den Capture-Flow orchestrieren.
-
-**Klasse: `PhotoboothWsServer`**
+**Zentrale Steuerlogik mit State Machine:**
 
 | Methode | Beschreibung |
 |---|---|
-| `attach(httpServer)` | WS Server an HTTP Server anhängen (Pfad: `/ws`) |
-| `handleTrigger()` | Capture-Flow starten |
-| `getState()` | Aktueller Zustand der Photobooth |
-| `getLastPhoto()` | Letztes aufgenommenes Foto |
-| `getConnectedClients()` | Verbundene Clients nach Rolle |
-| `close()` | Sauberes Herunterfahren |
+| `HandleTrigger()` | Startet Capture-Sequenz (Countdown → Capture → Process → Preview) |
+| `SetState(state)` | Setzt State + Broadcast an alle Clients |
+| `GetUptime()` | Formatierter Uptime-String (HH:MM:SS oder MM:SS) |
+| `GetState()` | Aktueller State als String |
 
-**Heartbeat:** Alle 30 Sekunden `ping` an alle Clients.
-
-**State Change Callback:** `onStateChange` wird für die REST Legacy API genutzt.
+**States:** `idle`, `countdown`, `capturing`, `processing`, `preview`, `error`
 
 ---
 
-### `api/routes.ts` – REST API
+### `internal/logging/` – Strukturiertes Logging
 
-**Aufgabe:** HTTP Endpoints für Frontend und Legacy-Client.
+**Ring-Buffer Logger mit WebSocket Broadcast:**
 
-**Alle Routen beginnen mit `/api/`**
+| Feature | Beschreibung |
+|---|---|
+| Max Einträge | 500 (älteste werden bei Überlauf gelöscht) |
+| Levels | `info`, `warn`, `error`, `debug` |
+| Sources | `app`, `camera`, `imaging`, `wifi`, `dns`, etc. |
+| Broadcast | Jeder Log-Eintrag wird sofort per WebSocket gesendet |
+| REST | `GET /api/logs?limit=100` für bestehende Logs |
 
-**Legacy-Polling:** `GET /api/legacy/poll` gibt State + letztes Foto zurück. Client pollt alle 500ms.
-
-**Paginierung:** `GET /api/photos?page=1&limit=50`
-
----
-
-### `network/wifi.ts` – WLAN Hotspot
-
-**Aufgabe:** WLAN Access Point über NetworkManager einrichten.
-
-**Ablauf:**
-1. Prüfen ob `nmcli` verfügbar ist
-2. Prüfen ob Connection `photobooth-ap` bereits existiert
-3. Falls nicht: Connection erstellen + konfigurieren (AP Mode, IP, DHCP)
-4. Connection aktivieren
-
-**Fallback:** Wenn NetworkManager nicht vorhanden → Warnung loggen, Status `'unavailable'` zurückgeben.
-
-**nmcli Connection-Name:** `photobooth-ap` (fest)
-
----
-
-### `network/captive.ts` – Captive Portal
-
-**Aufgabe:** DNS-Redirect über dnsmasq für automatisches Dashboard-Öffnen.
-
-**Konfigurationsdatei:** `/etc/dnsmasq.d/photobooth-captive.conf`
-
-**Inhalt:**
-```
-address=/#/192.168.4.1
-interface=wlan0
-no-resolv
+**Log-Entry Format:**
+```go
+type Entry struct {
+    Level     Level  `json:"level"`
+    Message   string `json:"message"`
+    Source    string `json:"source"`
+    Timestamp int64  `json:"timestamp"`
+}
 ```
 
-**Bedeutung:** Alle DNS-Anfragen (`#` = Wildcard) werden auf `192.168.4.1` aufgelöst → Browser zeigt Dashboard.
+---
+
+### `internal/dns/` – Captive Portal DNS
+
+**Eigener DNS Server in Go (`miekg/dns`):**
+- Beantwortet alle DNS-Anfragen mit der Pi-IP
+- Kein dnsmasq nötig
+- Läuft als Goroutine auf Port 53
+- Braucht Root-Rechte (oder `CAP_NET_BIND_SERVICE`)
 
 ---
 
-### `auth/session.ts` – Authentifizierung
+### `internal/network/` – WiFi Manager
 
-**Aufgabe:** PIN-basierter Zugangsschutz für das Dashboard.
+**nmcli Wrapper für Hotspot-Konfiguration:**
 
-**Mechanismus:**
-1. Client sendet PIN via `POST /api/auth/login`
-2. Server prüft gegen `config.auth.dashboardPin`
-3. Bei Erfolg: Session-ID als HTTP-Only Cookie setzen
-4. Cookie Gültigkeit: 24 Stunden
+| Funktion | Beschreibung |
+|---|---|
+| `EnsureHotspot()` | Erstellt/aktiviert den Hotspot |
+| Connection prüfen | Sucht nach bestehender `photobooth-ap` Connection |
+| Erstellen | `nmcli connection add type wifi ...` |
+| Aktivieren | `nmcli connection up photobooth-ap` |
 
-**Kein Schutz nötig für:** Buzzer, Countdown, Gallery (konfigurierbar)
+---
 
-**Middleware:** `requireAuth()` – kann in beliebige Routen eingehängt werden
+### `internal/api/handler.go` – REST API
+
+| Methode | Route | Beschreibung |
+|---|---|---|
+| `GET` | `/api/status` | State, Clients, Uptime, CameraInfo |
+| `POST` | `/api/trigger` | Capture auslösen |
+| `GET` | `/api/photos` | Foto-Liste |
+| `GET` | `/api/photos/latest` | Letztes Foto |
+| `GET` | `/api/logs` | Server-Logs (Ring-Buffer, `?limit=N`) |
+| `GET` | `/api/legacy/poll` | Kombinierter Status für Legacy-Client |
 
 ---
 
@@ -315,7 +270,7 @@ no-resolv
     │                    │
     │                    ▼
     │              PROCESSING
-    │               (sharp)
+    │               (imaging)
     │                    │
     │                    ▼
     │               PREVIEW
@@ -324,40 +279,40 @@ no-resolv
     └────────────────────┘
 ```
 
-### Detaillierter Ablauf
+### Detaillierter Ablauf mit Logging
 
 ```
 1. Trigger empfangen (WebSocket oder REST)
-   └─ State: COUNTDOWN
-   └─ Broadcast: countdown { remaining: 5, total: 5 }
-   └─ … (jede Sekunde)
-   └─ Broadcast: countdown { remaining: 0, total: 5 }
+   ├─ Log: [info] [app] "Capture sequence triggered"
+   ├─ State: COUNTDOWN
+   ├─ Broadcast: countdown { remaining: 5, total: 5 }
+   └─ … (jede Sekunde + Log)
 
 2. Kamera auslösen
-   └─ State: CAPTURING
+   ├─ Log: [info] [app] "Capturing photo..."
+   ├─ State: CAPTURING
    └─ gphoto2 --capture-image-and-download
-   └─ Foto gespeichert: data/photos/original/IMG_xxx.jpg
 
 3. Bild verarbeiten
-   └─ State: PROCESSING
-   └─ sharp: Original → Preview (800px) + Thumbnail (200px)
+   ├─ Log: [info] [app] "Processing image: IMG_xxx.jpg"
+   ├─ State: PROCESSING
+   └─ imaging: Original → Preview + Thumbnail
 
 4. Vorschau zeigen
-   └─ State: PREVIEW
-   └─ Broadcast: photo_ready { filename, urls }
+   ├─ Log: [info] [app] "Photo ready: IMG_xxx.jpg"
+   ├─ State: PREVIEW
    └─ Timer: previewDisplaySeconds (8s default)
 
 5. Zurück zu Idle
-   └─ State: IDLE
-   └─ Bereit für nächsten Trigger
+   └─ Log: [info] [app] "Returning to idle"
 ```
 
 ### Fehlerbehandlung
 
-Bei Fehler in Schritt 2-3:
-- `error` Event an alle Clients senden
-- Zurück zu `IDLE`
-- Log auf Server-Konsole
+Bei Fehler in Capture/Processing:
+- `error` Event an alle Clients
+- Log: `[error] [app] "Capture failed: ..."`
+- State zurück zu `IDLE` nach 3 Sekunden
 
 ---
 
@@ -367,65 +322,111 @@ Bei Fehler in Schritt 2-3:
 
 **`photobooth` Store:**
 - `state` – Aktueller Zustand (idle, countdown, etc.)
-- `countdown` – `{ remaining, total }` für Countdown
-- `lastPhoto` – Letztes aufgenommenes Foto
+- `countdown` – `{ remaining, total }` für Countdown-Anzeige
+- `lastPhoto` – Letztes aufgenommenes Foto (`{ url, thumbUrl }`)
 - `clients` – Anzahl verbundener Clients
-- `uptime` – Server Uptime
-- `logs` – Array von Log-Einträgen (max 200)
-- `cameraInfo` – `CameraInfo` Objekt (connected, model, manufacturer, lensName, batteryLevel, storageFree etc.)
-- `trigger()` – Foto auslösen
-- `fetchStatus()` – Status inkl. Kamera-Info vom Server laden (alle 5s per Polling)
+- `uptime` – Server Uptime (formatierter String)
+- `logs` – Array von Log-Einträgen (max 200 im Frontend)
+- `cameraInfo` – Kamera-Infos (Modell, Akku, Speicher, etc.)
+- `connected` – WebSocket Verbindungsstatus
+- `trigger()` – Foto auslösen via WebSocket
+- `fetchStatus()` – Status + CameraInfo laden (alle 5s)
 - `fetchLogs()` – Bestehende Logs laden
+
+**`clientMode` Store:**
+- `selectedMode` – Gewählter Client-Modus
+- `modeDefinition` – Modus-Definition mit Capability-Flags
+- `selectMode(id)` – Modus setzen
+- `clearMode()` – Modus zurücksetzen
 
 **`gallery` Store:**
 - `photos` – Array von PhotoEntry
-- `total` – Gesamtanzahl
 - `loading` – Lade-Status
-- `fetchPhotos(page)` – Fotos laden
-- `deletePhoto(filename)` – Foto löschen
+- `fetchPhotos()` – Fotos laden
 
 ### Composables
 
-**`useWebSocket()`:**
-- Auto-Connect beim Mount
-- Auto-Reconnect bei Verbindungsverlust (mit Backoff)
-- Event-Dispatching an Pinia Stores
-- `send(type, data)` – Nachricht senden
-- `connected` – Ref<boolean>
+**`useFullscreen()`:**
+- `enterFullscreen(el?)` – Fullscreen aktivieren (Cross-Browser)
+- `exitFullscreen()` – Fullscreen verlassen
+- `isFullscreen` – Reaktiver Zustand
+- Unterstützt: standard, webkit, moz, ms Prefixes
 
-**`useCountdown()`:**
-- Reactive Countdown basierend auf Store-Daten
-- Beep-Sound bei Tick (optional)
+**`useExitLock()`:**
+- `tap()` – Tap registrieren (10 benötigt)
+- `lock()` – Lock wieder aktivieren
+- `tapCount` – Aktueller Zähler
+- `isUnlocked` – Ob das Overlay angezeigt wird
+- 3 Sekunden Inaktivitäts-Timeout für Reset
 
 ### Views & Routen
 
 | Route | View | Beschreibung |
 |---|---|---|
-| `/` | DashboardView | Admin-Panel: Status, Trigger, letztes Foto, Kamera-Info, Log-Viewer |
-| `/buzzer` | BuzzerView | Großer Touch-Button zum Auslösen |
-| `/countdown` | CountdownView | Vollbild-Countdown mit Animation |
-| `/preview` | PreviewView | Foto-Vorschau nach Aufnahme |
-| `/gallery` | GalleryView | Foto-Raster mit Lightbox |
+| `/` | DashboardView | Admin-Panel: Status, Trigger, Kamera-Info, Log-Viewer |
+| `/modes` | ModeSelectView | Client-Modus wählen (6 Modi) |
+| `/client` | ClientView | Composite View – zeigt gewählten Modus |
+| `/gallery` | GalleryView | Foto-Raster |
+| `/buzzer` | → `/modes` | Legacy-Redirect |
+| `/countdown` | → `/modes` | Legacy-Redirect |
+| `/preview` | → `/modes` | Legacy-Redirect |
 
-**Dashboard Camera-Karte:**
-- Zeigt Verbindungsstatus (grün/rot), Modellname, Hersteller, Objektiv
-- Akku-Füllstand mit farbigem Balken (grün >50%, gelb >20%, rot ≤20%)
-- Freier Speicherplatz auf der SD-Karte
-- Fallback: "Keine Kamera erkannt" wenn `cameraInfo.connected === false`
-- Wird alle 5 Sekunden per Status-Polling aktualisiert
+### Dashboard-Karten
 
-### Client-Rollen-System
+**State Card:** Farbiger Indikator + State-Label  
+**Trigger Card:** Capture-Button (disabled wenn nicht idle)  
+**Last Photo Card:** Thumbnail-Vorschau des letzten Fotos  
+**Camera Card:**
+- Verbindungsstatus (grün/rot Punkt)
+- Modellname, Hersteller, Objektiv
+- Akku-Füllstand mit Farbbalken (grün >50%, gelb >20%, rot ≤20%)
+- Freier Speicherplatz
 
-Jede View registriert sich beim WebSocket-Server mit einer Rolle:
+---
 
-```javascript
-// In BuzzerView.vue
-onMounted(() => {
-  ws.send('register', { role: 'buzzer' })
-})
+## Client-Mode-System
+
+### Architektur
+
+```
+/modes (ModeSelectView)
+  ├─ Modus wählen → Fullscreen aktivieren
+  └─ Router: /client
+
+/client (ClientView)
+  ├─ Exit-Lock aktiv (10 Taps zum Entsperren)
+  ├─ Composite View basierend auf Mode-Flags:
+  │   ├─ hasBuzzer → Touch-Auslöser im Idle-State
+  │   ├─ hasCountdown → SVG Ring + Countdown-Zahl
+  │   ├─ hasPreview → Foto-Anzeige im Preview-State
+  │   └─ hasGallery → Grid-Ansicht aller Fotos
+  └─ Exit-Lock Overlay:
+      ├─ "Modus wählen" → /modes
+      ├─ "Client Modus verlassen" → / (Dashboard)
+      └─ "Abbrechen" → Overlay schließen
 ```
 
-Das Dashboard zeigt an welche Client-Rollen verbunden sind.
+### Mode-Definitionen
+
+```typescript
+type ClientMode =
+  | 'buzzer-countdown-preview'  // Vollständig
+  | 'buzzer-countdown'          // Ohne Bildvorschau
+  | 'countdown-preview'         // Monitor + Vorschau (kein Auslöser)
+  | 'preview-only'              // Nur Bildanzeige
+  | 'countdown-only'            // Nur Countdown (kein Auslöser)
+  | 'gallery'                   // Galerie-Ansicht
+```
+
+### Verhalten pro State
+
+| State | hasBuzzer | !hasBuzzer + hasCountdown | hasPreview only |
+|---|---|---|---|
+| `idle` | Touch-Auslöser (Kamera-Icon) | "Warte auf Auslöser" | Letztes Foto |
+| `countdown` | SVG Ring + Zahl | SVG Ring + Zahl | Pulsierender Punkt |
+| `capturing` | Weißer Ping-Punkt | Weißer Ping-Punkt | Weißer Ping-Punkt |
+| `processing` | Spinner | Spinner | Spinner |
+| `preview` | Foto (wenn hasPreview) oder ✓ | Foto oder ✓ | Foto |
 
 ---
 
@@ -435,46 +436,15 @@ Das Dashboard zeigt an welche Client-Rollen verbunden sind.
 - iPad Air 1 (Safari 9)
 - iPad 2/3/4 (Safari 9-10)
 - Ältere Android-Tablets
-- Jeder Browser ohne ES6/Proxy Support
 
 ### Technische Einschränkungen
-- **Kein** `const`/`let` → nur `var`
-- **Kein** `async`/`await` → Callbacks oder `.then()`
-- **Kein** Template Literals → String-Konkatenation
-- **Kein** `fetch` → `XMLHttpRequest`
-- **Kein** Arrow Functions → `function(){}`
-- **Kein** `class` → Prototyp-basiert oder Objekt-Literal
-- **Kein** CSS Custom Properties
-- **Kein** Flexbox `gap`
-- **Kein** CSS Grid (Safari 9)
-- **Kein** WebSocket (wird nicht genutzt, Polling stattdessen)
-
-### Polling-Mechanismus
-
-```javascript
-// Legacy: Alle 500ms Status abfragen
-var POLL_INTERVAL = 500;
-
-function pollStatus() {
-  var xhr = new XMLHttpRequest();
-  xhr.open('GET', '/api/legacy/poll');
-  xhr.onload = function() {
-    if (xhr.status === 200) {
-      var data = JSON.parse(xhr.responseText);
-      updateUI(data.state, data.lastPhoto);
-    }
-    setTimeout(pollStatus, POLL_INTERVAL);
-  };
-  xhr.onerror = function() {
-    setTimeout(pollStatus, POLL_INTERVAL * 2);
-  };
-  xhr.send();
-}
-```
+- Nur ES5 JavaScript (`var`, `function`, `XMLHttpRequest`)
+- Kein WebSocket → Polling alle 500ms (`GET /api/legacy/poll`)
+- Einfaches CSS (kein Flexbox `gap`, kein Grid, keine Custom Properties)
 
 ### Seiten-Struktur
 - `index.html` – Startseite mit Buzzer + Countdown + Preview in einem
-- `gallery.html` – Einfache Galerie mit Thumbnail-Grid
+- Serviert unter `/legacy/`
 
 ---
 
@@ -494,150 +464,89 @@ nmcli connection modify photobooth-ap \
   ipv4.addresses 192.168.4.1/24 \
   ipv4.method shared
 
-# Offenes WLAN (kein Passwort)
-nmcli connection modify photobooth-ap remove 802-11-wireless-security
-
 # Aktivieren
 nmcli connection up photobooth-ap
 ```
 
-### Manuelles Setup (hostapd + dnsmasq)
+> **Wichtig:** `dnsmasq-base` muss installiert sein für `ipv4.method shared` (DHCP).
 
-Falls NetworkManager nicht verfügbar ist:
+### Captive Portal (eingebaut)
 
-**1. hostapd installieren:**
-```bash
-sudo apt install hostapd dnsmasq
-```
-
-**2. `/etc/hostapd/hostapd.conf`:**
-```
-interface=wlan0
-driver=nl80211
-ssid=Photobooth
-hw_mode=g
-channel=7
-wmm_enabled=0
-macaddr_acl=0
-auth_algs=1
-wpa=0
-```
-
-**3. `/etc/dnsmasq.conf`:**
-```
-interface=wlan0
-dhcp-range=192.168.4.10,192.168.4.100,255.255.255.0,24h
-address=/#/192.168.4.1
-```
-
-**4. Statische IP in `/etc/dhcpcd.conf`:**
-```
-interface wlan0
-static ip_address=192.168.4.1/24
-nohook wpa_supplicant
-```
-
-**5. Services starten:**
-```bash
-sudo systemctl unmask hostapd
-sudo systemctl enable hostapd dnsmasq
-sudo reboot
-```
+Der DNS Server ist direkt in Go implementiert (`internal/dns/`):
+- Alle DNS-Anfragen → Pi-IP (`192.168.4.1`)
+- Kein `dnsmasq` für DNS nötig
+- Läuft auf Port 53 (braucht Root)
 
 ---
 
-## Authentifizierung
+## Logging-System
 
-### Konzept
+### Backend
 
-Da das WLAN offen ist (keine User-Hürde), findet die Zugriffskontrolle in der Software statt:
+**Ring-Buffer Logger** (`internal/logging/`):
+- Bis zu 500 Einträge im Speicher
+- Threadsafe (Mutex-geschützt)
+- Broadcast-Funktion: Neue Einträge werden sofort per WebSocket an alle Clients gesendet
 
-| Bereich | Auth | Grund |
-|---|---|---|
-| Buzzer | Optional | Gäste sollen einfach auslösen können |
-| Countdown | Nein | Passive Anzeige |
-| Gallery | Optional | Gäste sollen Fotos sehen können |
-| Dashboard | Ja (PIN) | Admin-Funktionen schützen |
-| Config API | Ja (PIN) | Einstellungen schützen |
-| Foto löschen | Ja (PIN) | Versehentliches Löschen verhindern |
-| USB Export | Ja (PIN) | Physische Aktion bestätigen |
+**Log-Quellen:**
+- `app` – Capture-Sequenz, State-Changes
+- `camera` – gphoto2 Aufrufe
+- `wifi` – Hotspot-Status
+- `dns` – DNS Server
+- `main` – Startup-Meldungen
 
-### Session-Flow
+### Frontend
 
-```
-Client                          Server
-  │                               │
-  │  POST /api/auth/login         │
-  │  { pin: "1234" }              │
-  │──────────────────────────────>│
-  │                               │ PIN prüfen
-  │  Set-Cookie: pb_session=xxx   │
-  │<──────────────────────────────│
-  │                               │
-  │  GET /api/config              │
-  │  Cookie: pb_session=xxx       │
-  │──────────────────────────────>│
-  │                               │ Session prüfen → OK
-  │  { config... }                │
-  │<──────────────────────────────│
-```
-
----
-
-## Dateistruktur & Namenskonventionen
-
-### Fotos
-
-```
-data/photos/
-├── original/IMG_20260219_143022.jpg    # Originalgröße (von Kamera)
-├── preview/IMG_20260219_143022.jpg     # 800px breit, 80% JPEG
-└── thumb/IMG_20260219_143022.jpg       # 200px breit, 70% JPEG
-```
-
-**Dateiname-Format:** `IMG_YYYYMMDD_HHMMSS.jpg`
-
-### Code-Konventionen
-
-- **Backend:** TypeScript, ES Modules (`import/export`), `.ts` Dateien
-- **Frontend:** Vue 3 Composition API (`<script setup>`), TypeScript
-- **Legacy:** Vanilla JavaScript, ES5, IIFE-Pattern
-- **CSS (Frontend):** Tailwind 4 Utility Classes
-- **CSS (Legacy):** Einfaches CSS, keine Custom Properties, keine modernen Features
+**Dashboard Log-Viewer:**
+- Monospace-Font, Unix-Terminal-Style
+- Farbcodiert nach Level (Info=grün, Warn=gelb, Error=rot, Debug=grau)
+- Auto-Scroll (ein/ausschaltbar)
+- Zeigt Timestamp, Level, Source, Message
+- Initial: Bestehende Logs via `GET /api/logs`
+- Live: Neue Logs via WebSocket `log` Events
 
 ---
 
 ## Build & Deployment
 
-### Build-Reihenfolge
+### Build Script (`scripts/build-pi.sh`)
 
 ```bash
 # 1. Frontend bauen (Vite → statische Dateien)
 cd frontend && npm run build
-#    Output: dist/frontend/
 
-# 2. Backend kompilieren (Go → Binary, Cross-Compile für Pi)
-#    Siehe scripts/build-pi.sh
-GOOS=linux GOARCH=arm GOARM=7 go build -o dist/photobooth backend/cmd/server/main.go
+# 2. Backend Cross-Compilieren (Go → ARM64)
+GOOS=linux GOARCH=arm64 go build -o dist/photobooth backend/cmd/server/main.go
 
-# 3. Legacy-Client – kein Build nötig
-#    (statische Dateien, direkt serviert)
+# 3. Assets kopieren (Legacy Client, Config, Scripts, Public)
+cp -r legacy/ dist/legacy/
+cp -r public/ dist/public/
+cp config.json dist/
 ```
 
 ### Deploy Script (`scripts/deploy.sh`)
 
-**Verwendet SSH ControlMaster** für eine einmalige Passwort-Eingabe über alle SSH/rsync-Verbindungen hinweg.
+**SSH ControlMaster** – nur einmal Passwort eingeben:
 
 ```bash
-./scripts/deploy.sh pi@192.168.4.1
+./scripts/deploy.sh pi@192.168.x.x
 ```
 
 **Ablauf:**
 1. SSH ControlMaster-Verbindung herstellen (einmalige Passwort-Eingabe)
-2. `build-pi.sh` ausführen (Frontend + Backend kompilieren)
-3. Dateien per `rsync` zum Pi übertragen (ohne `data/` Ordner)
-4. `install.sh` auf dem Pi ausführen (systemd Service einrichten)
+2. `build-pi.sh` ausführen
+3. Dateien per `rsync` übertragen (ohne `data/`)
+4. `install.sh` auf dem Pi ausführen
 5. ControlSocket automatisch aufräumen bei Exit
+
+**Kein `sshpass` nötig** – ControlMaster nutzt eine einzige SSH-Session für alle Befehle.
+
+### Install Script (`scripts/install.sh`)
+
+Auf dem Pi ausgeführt:
+1. `gphoto2` und `dnsmasq-base` installieren (falls fehlend)
+2. Photobooth-Verzeichnisse erstellen
+3. systemd Service installieren und starten
 
 ### systemd Service
 
@@ -658,41 +567,31 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-**Service Befehle:**
-```bash
-sudo systemctl start photobooth      # Starten
-sudo systemctl stop photobooth       # Stoppen
-sudo systemctl restart photobooth    # Neustarten
-sudo systemctl status photobooth     # Status
-sudo journalctl -u photobooth -f     # Live-Logs
-```
-
 ---
 
 ## Bekannte Limitierungen
 
 ### Performance (Pi 3)
-- Bildverarbeitung: ~150-250ms pro Foto
+- Bildverarbeitung (pure Go): ~200-400ms pro Foto
 - WebSocket Broadcast: <5ms für alle Clients
-- Gesamte Capture-to-Preview: ~1-2 Sekunden (exkl. Countdown)
+- Gesamte Capture-to-Preview: ~1-3 Sekunden (exkl. Countdown)
 
 ### Captive Portal
 - Nicht 100% zuverlässig auf allen Geräten
 - Manche Android-Versionen zeigen ein kleines Popup statt vollem Browser
-- Desktop-Browser (Windows/Mac) reagieren unterschiedlich
-- **Workaround:** SSID enthält die IP als Hinweis
-
-### Foto-Download
-- Fotos werden direkt heruntergeladen (nicht auf SD gespeichert)
-- Bei USB-Fehler während gphoto2-Capture → Foto verloren
-- **Mitigation:** Retry-Logik (konfigurierbar)
+- Desktop-Browser reagieren unterschiedlich
+- DNS Server braucht Port 53 (Root oder CAP_NET_BIND_SERVICE)
 
 ### Gleichzeitige Auslöser
 - Nur ein Capture gleichzeitig möglich (Mutex)
 - Zweiter Trigger während Countdown/Capture wird abgelehnt
-- Client erhält `error` Event mit Code `NOT_IDLE`
+- Clients im Buzzer-Modus: Button ist disabled wenn State ≠ idle
 
 ### Legacy Client
 - Kein Echtzeit-Countdown (500ms Polling-Delay)
 - Einfacheres UI (kein Tailwind, keine Animationen)
-- Kein Preview-Fade, nur Hard-Switch
+- Kein Client-Mode-System (fest: Buzzer + Countdown + Preview)
+
+
+# Important
+*** CRITICAL *** Build steps and install scripts will be manually executed by the user

@@ -40,7 +40,16 @@ func main() {
 
 	// 3. Prepare Directories
 	cwd, _ := os.Getwd()
-	dataDir := filepath.Join(cwd, "data", "photos")
+	// Ensure base photos path is absolute
+	photosBase := cfg.Booth.PhotosBasePath
+	if !filepath.IsAbs(photosBase) {
+		photosBase = filepath.Join(cwd, photosBase)
+		cfg.Booth.PhotosBasePath = photosBase
+	}
+
+	// Album-based data dir
+	album := config.SanitizeAlbumName(cfg.Booth.CurrentAlbum)
+	dataDir := filepath.Join(photosBase, album)
 
 	// 4. Initialize Components
 
@@ -86,17 +95,40 @@ func main() {
 		hub.ServeWs(w, r)
 	})
 
-	// Static Files (Frontend) - Served at root
-	fs := http.FileServer(http.Dir("./public/frontend"))
-	mux.Handle("/", fs)
+	// Static Files (Frontend) - Served at root with SPA fallback
+	frontendDir := "./public/frontend"
+	fs := http.FileServer(http.Dir(frontendDir))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		path := filepath.Join(frontendDir, r.URL.Path)
+		_, err := os.Stat(path)
+		if os.IsNotExist(err) && r.URL.Path != "/" {
+			// If file does not exist (and it's not root), serve index.html for Vue Router fallback
+			http.ServeFile(w, r, filepath.Join(frontendDir, "index.html"))
+			return
+		}
+		// Otherwise let FileServer handle it
+		fs.ServeHTTP(w, r)
+	})
 
 	// Legacy Client - Served at /legacy/
 	legacyFs := http.FileServer(http.Dir("./public/legacy"))
 	mux.Handle("/legacy/", http.StripPrefix("/legacy/", legacyFs))
 
-	// Photos - Served at /photos/
-	photoFs := http.FileServer(http.Dir(dataDir))
-	mux.Handle("/photos/", http.StripPrefix("/photos/", photoFs))
+	// Photos - Served dynamically based on current album
+	mux.HandleFunc("/photos/", func(w http.ResponseWriter, r *http.Request) {
+		// remove /photos/ prefix
+		path := r.URL.Path[len("/photos/"):]
+		if path == "" {
+			http.NotFound(w, r)
+			return
+		}
+
+		// Get current album directory dynamically
+		albumDir := application.GetAlbumDir()
+		fullPath := filepath.Join(albumDir, path)
+
+		http.ServeFile(w, r, fullPath)
+	})
 
 	srv := &http.Server{
 		Addr:    ":80",
