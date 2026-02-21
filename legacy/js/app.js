@@ -19,8 +19,12 @@
         countdown:  document.getElementById('screen-countdown'),
         capturing:  document.getElementById('screen-capturing'),
         preview:    document.getElementById('screen-preview'),
-        error:      document.getElementById('screen-error')
+        error:      document.getElementById('screen-error'),
+        warning:    document.getElementById('screen-system-warning')
     };
+
+    var warningCam  = document.getElementById('warning-camera');
+    var warningDisk = document.getElementById('warning-disk');
 
     var elStatusBar    = document.getElementById('status-bar');
     var elStatusDot    = document.getElementById('status-dot');
@@ -138,6 +142,20 @@
             }
         }
 
+        // --- System Warnings Overlay ---
+        var camConnected = !data.cameraInfo || data.cameraInfo.connected;
+        var diskFull = data.diskInfo && data.diskInfo.usedPercent > 95;
+
+        if (!camConnected || diskFull) {
+            screens.warning.className = 'screen active';
+            warningCam.style.display = (!camConnected) ? 'flex' : 'none';
+            warningDisk.style.display = (camConnected && diskFull) ? 'flex' : 'none';
+        } else {
+            if (screens.warning.className.indexOf('active') !== -1) {
+                screens.warning.className = 'screen';
+            }
+        }
+
         currentState = state;
     }
 
@@ -176,9 +194,26 @@
         xhr.send();
     }
 
+    // Aggressive Fullscreen
+    function enterFullscreen() {
+        var el = document.documentElement;
+        var rfs = el.requestFullscreen
+            || el.webkitRequestFullscreen
+            || el.mozRequestFullScreen
+            || el.msRequestFullscreen;
+        if (rfs) {
+            try { rfs.call(el); } catch(e) {}
+        }
+    }
+
+    window.handleTap = function() {
+        enterFullscreen();
+    };
+
     // Trigger (global for onclick)
     window.doTrigger = function() {
         if (currentState !== 'idle' && currentState !== 'preview') return;
+        enterFullscreen(); // Ensure fullscreen on trigger too
 
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/trigger', true);

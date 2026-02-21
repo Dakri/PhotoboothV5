@@ -235,11 +235,14 @@ func (h *Handler) postSettings(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleLegacyPoll(w http.ResponseWriter, r *http.Request) {
 	remaining, total := h.app.GetCountdown()
+	camInfo, diskInfo := h.app.GetSystemInfo()
 	status := map[string]interface{}{
-		"state":     h.app.GetState(),
-		"lastPhoto": h.app.GetLastPhoto(),
-		"countdown": map[string]interface{}{"remaining": remaining, "total": total},
-		"timestamp": time.Now().UnixMilli(),
+		"state":      h.app.GetState(),
+		"lastPhoto":  h.app.GetLastPhoto(),
+		"countdown":  map[string]interface{}{"remaining": remaining, "total": total},
+		"timestamp":  time.Now().UnixMilli(),
+		"cameraInfo": camInfo,
+		"diskInfo":   diskInfo,
 	}
 	jsonResponse(w, status)
 }

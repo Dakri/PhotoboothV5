@@ -43,6 +43,10 @@ type App struct {
 	countdownRemaining int
 	countdownTotal     int
 	captureSeq         int
+
+	// Cache for system info
+	cachedCameraInfo camera.CameraInfo
+	cachedDiskInfo   disk.Usage
 }
 
 func NewApp(cfg *config.Config, cam *camera.Controller, img *imaging.Processor, store *storage.Manager, hub *websocket.Hub) *App {
@@ -362,15 +366,28 @@ func (a *App) cameraInfoRefreshLoop() {
 
 		// Broadcast System Info (Camera + Disk)
 		usage, _ := disk.GetUsage(a.Config.Booth.PhotosBasePath)
+		camInfo := a.Camera.GetCachedInfo()
+
+		a.mu.Lock()
+		a.cachedCameraInfo = camInfo
+		a.cachedDiskInfo = usage
+		a.mu.Unlock()
+
 		a.Hub.Broadcast <- websocket.Event{
 			Type: websocket.EventTypeSystem,
 			Data: map[string]interface{}{
-				"camera": a.Camera.GetCachedInfo(),
+				"camera": camInfo,
 				"disk":   usage,
 			},
 			Timestamp: time.Now().UnixMilli(),
 		}
 	}
+}
+
+func (a *App) GetSystemInfo() (camera.CameraInfo, disk.Usage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cachedCameraInfo, a.cachedDiskInfo
 }
 
 // GetAlbumDir returns the full path to the current album directory.
