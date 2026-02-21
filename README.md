@@ -197,4 +197,4 @@ idle → countdown → capturing → processing → preview → idle
 
 ## Lizenz
 
-MIT
+GNU GPLv3
