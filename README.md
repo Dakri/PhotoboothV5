@@ -142,8 +142,8 @@ PhotoboothV5/
 
 ### Schnellstart (Cross-Compile & Deploy)
 
-*** Dies erfordert NodeJs 20+ und Go 1.25+ ***
-*** Ich empfehle WSL2 für das deployment ***
+**Dies erfordert NodeJs 20+ und Go 1.25+**
+**Ich empfehle WSL2 für das deployment**
 
 ```bash
 # Auf dem Entwicklungs-PC (nicht auf dem Pi!)
