@@ -335,12 +335,12 @@ export const usePhotoboothStore = defineStore('photobooth', () => {
         }
     }
 
-    async function fetchUsbDevices() {
+    async function fetchUsbDevices(mount = false) {
         try {
-            const res = await fetch('/api/usb/devices')
-            if (res.ok) {
-                usbDevices.value = await res.json() || []
-            }
+            const url = mount ? '/api/usb/devices?mount=true' : '/api/usb/devices'
+            const response = await fetch(url)
+            const data = await response.json()
+            usbDevices.value = data
         } catch (e) {
             console.error('Failed to fetch USB devices:', e)
         }

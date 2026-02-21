@@ -117,7 +117,7 @@
                                 :class="localSettings.currentAlbum === album.id ? 'bg-emerald-400' : 'bg-transparent'">
                             </div>
                             <span class="font-medium text-white text-lg truncate" :title="album.name">{{ album.name
-                                }}</span>
+                            }}</span>
                             <span v-if="album.captureMethod"
                                 class="text-[10px] font-mono bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700">Methode
                                 {{ album.captureMethod }}</span>
@@ -168,7 +168,7 @@
                             d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z"
                             clip-rule="evenodd" />
                     </svg>
-                    Aktualisieren
+                    USB Geräte erkennen und mounten
                 </button>
             </div>
 
@@ -293,7 +293,7 @@ const usbLoading = ref(false);
 
 async function refreshUsb() {
     usbLoading.value = true;
-    await photobooth.fetchUsbDevices();
+    await photobooth.fetchUsbDevices(true);
     usbLoading.value = false;
 }
 

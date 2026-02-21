@@ -301,21 +301,23 @@ func (h *Handler) handleUsbDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auto-mount any unmounted USB devices so we can read their free space
-	for _, d := range devices {
-		if d.MountPoint == "" {
-			h.app.Log.Info("usb", "Auto-mounting %s...", d.Name)
-			if _, err := disk.MountUsb(d.Name); err != nil {
-				h.app.Log.Warn("usb", "Auto-mount of %s failed: %v", d.Name, err)
+	// Auto-mount any unmounted USB devices only if requested via ?mount=true
+	if r.URL.Query().Get("mount") == "true" {
+		for _, d := range devices {
+			if d.MountPoint == "" {
+				h.app.Log.Info("usb", "Auto-mounting %s...", d.Name)
+				if _, err := disk.MountUsb(d.Name); err != nil {
+					h.app.Log.Warn("usb", "Auto-mount of %s failed: %v", d.Name, err)
+				}
 			}
 		}
-	}
 
-	// Re-fetch after mounting so free space is populated
-	devices, err = disk.GetUsbDevices()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		// Re-fetch after mounting so free space is populated
+		devices, err = disk.GetUsbDevices()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	jsonResponse(w, devices)
 }
